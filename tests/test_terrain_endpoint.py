@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import math
-import pickle
 from pathlib import Path
 
 import jax
@@ -25,6 +24,7 @@ from naigos.data.geodetic import GeoRef  # noqa: E402
 from naigos.demo.live import Simulation, replay_payload  # noqa: E402
 from naigos.env.flight_env import NaigosEnv  # noqa: E402
 from naigos.env.terrain import sample_height  # noqa: E402
+from naigos.rl.checkpoint import load as load_checkpoint  # noqa: E402
 from naigos.rl.ppo import greedy_policy  # noqa: E402
 
 CKPT = Path("checkpoints/theatre_1000")
@@ -42,7 +42,7 @@ def sim_and_notes():
         pytest.skip(f"tehran_basin snapshot unavailable: {e}")
     sim = Simulation(
         env=NaigosEnv(cfg, hmap=hmap),
-        policy=greedy_policy(pickle.loads(CKPT.read_bytes())["actor"], cfg),
+        policy=greedy_policy(load_checkpoint(CKPT)["actor"], cfg),
         georef=GeoRef(**notes["georef"]),
         reroll_s=0.0,
     )

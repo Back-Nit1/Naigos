@@ -8,7 +8,6 @@ including leases, idempotency, gates and the champion pointer, is the real code.
 from __future__ import annotations
 
 import json
-import pickle
 
 import pytest
 
@@ -302,11 +301,15 @@ def test_no_concurrent_writers_for_a_candidate(h):
 
 
 def test_a_decided_candidate_is_never_retrained_or_rewritten(h):
+    """Recursive, not a shallow listing: the checkpoint is a directory
+    (next-steps.md G-3), and "never rewritten" has to cover what is inside it
+    too, not just the candidate directory's top-level files."""
     cid = _first_candidate(h)
-    before = {p.name: p.read_bytes() for p in h.lay.candidate_dir(cid).iterdir() if p.is_file()}
+    cand_dir = h.lay.candidate_dir(cid)
+    before = {rel: layout.sha256_file(cand_dir / rel) for rel in layout.tree_files(cand_dir)}
     out = coordinator.retry(h.svc, cid)
     assert out["status"] == jobs.SKIPPED and "immutable" in out["reason"]
-    after = {p.name: p.read_bytes() for p in h.lay.candidate_dir(cid).iterdir() if p.is_file()}
+    after = {rel: layout.sha256_file(cand_dir / rel) for rel in layout.tree_files(cand_dir)}
     assert before == after
 
 

@@ -135,17 +135,17 @@ def test_reroll_moves_threats_clears_tracks_and_keeps_terrain():
 # ------------------------------------------------------------------ server ---
 def test_live_frames_are_wellformed_and_geolocated(theatre):
     """Drive the Simulation directly -- no socket, no thread, no flake."""
-    import pickle
     from pathlib import Path
 
     from naigos.demo.live import Simulation
+    from naigos.rl.checkpoint import load as load_checkpoint
     from naigos.rl.ppo import greedy_policy
 
     ckpt = Path("checkpoints/theatre_1000")
     if not ckpt.exists():
         pytest.skip("no shipped checkpoint")
     cfg, hmap, notes = theatre
-    params = pickle.loads(ckpt.read_bytes())["actor"]
+    params = load_checkpoint(ckpt)["actor"]
     sim = Simulation(
         env=NaigosEnv(cfg, hmap=hmap),
         policy=greedy_policy(params, cfg),
@@ -171,10 +171,10 @@ def test_live_frames_are_wellformed_and_geolocated(theatre):
 
 
 def test_scene_payload_is_serialisable_and_complete(theatre):
-    import pickle
     from pathlib import Path
 
     from naigos.demo.live import Simulation
+    from naigos.rl.checkpoint import load as load_checkpoint
     from naigos.rl.ppo import greedy_policy
 
     ckpt = Path("checkpoints/theatre_1000")
@@ -183,7 +183,7 @@ def test_scene_payload_is_serialisable_and_complete(theatre):
     cfg, hmap, notes = theatre
     sim = Simulation(
         env=NaigosEnv(cfg, hmap=hmap),
-        policy=greedy_policy(pickle.loads(ckpt.read_bytes())["actor"], cfg),
+        policy=greedy_policy(load_checkpoint(ckpt)["actor"], cfg),
         georef=GeoRef(**notes["georef"]),
         reroll_s=0.0,
     )

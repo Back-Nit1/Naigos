@@ -478,9 +478,8 @@ def test_the_live_server_serves_models_only_by_registry_name():
 
 @pytest.fixture(scope="module")
 def sim():
-    import pickle
-
     from naigos.env.theatre_bridge import env_from_theatre
+    from naigos.rl.checkpoint import load as load_checkpoint
     from naigos.rl.ppo import greedy_policy
 
     ckpt = REPO / "checkpoints" / "theatre_1000"
@@ -491,7 +490,7 @@ def sim():
     except FileNotFoundError as e:
         pytest.skip(f"tehran_basin snapshot unavailable: {e}")
     s = live.Simulation(env=NaigosEnv(cfg, hmap=hmap),
-                        policy=greedy_policy(pickle.loads(ckpt.read_bytes())["actor"], cfg),
+                        policy=greedy_policy(load_checkpoint(ckpt)["actor"], cfg),
                         georef=GeoRef(**notes["georef"]), speed=1e9, reroll_s=0.0)
     return s, notes
 

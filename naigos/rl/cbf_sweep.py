@@ -421,11 +421,9 @@ def _config_dict(obj) -> dict:
 
 
 def _sha256(path: Path) -> str:
-    h = hashlib.sha256()
-    with open(path, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            h.update(chunk)
-    return h.hexdigest()
+    from ..pipeline import layout
+
+    return layout.sha256_path(path)
 
 
 def env_config_from_blob(blob: dict, **overrides) -> EnvConfig:
@@ -505,11 +503,12 @@ def require_actor_compatible(actor_params, cfg: EnvConfig, source: str) -> None:
 def checkpoint_provenance(path: str | os.PathLike, blob: dict) -> dict:
     """Everything needed to say which artefact produced these numbers."""
     p = Path(path)
+    size = p.stat().st_size if p.is_file() else sum(f.stat().st_size for f in p.rglob("*") if f.is_file())
     return {
         "path": str(p),
         "resolved_path": str(p.resolve()),
         "sha256": _sha256(p),
-        "bytes": p.stat().st_size,
+        "bytes": size,
         "iteration": blob.get("iter"),
         "schema": blob.get("schema"),
         "red_level_at_checkpoint": blob.get("red_level"),
@@ -570,7 +569,7 @@ def run_sweep(
     blob = None
     if checkpoint is not None:
         path = Path(checkpoint)
-        if not path.is_file():
+        if not path.exists():
             raise SweepConfigError(f"checkpoint not found: {path}")
         blob = ckpt_mod.load(path)
         if base_env_cfg is None:

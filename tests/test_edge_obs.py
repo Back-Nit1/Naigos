@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pickle
 from pathlib import Path
 
 import jax
@@ -13,7 +12,7 @@ import pytest
 from naigos.env.config import EnvConfig
 from naigos.env.flight_env import NaigosEnv
 from naigos.env.obs import POS_SCALE, edge_distances
-from naigos.rl.checkpoint import obs_config_from_blob, require_actor_ego_dim
+from naigos.rl.checkpoint import load as load_checkpoint, obs_config_from_blob, require_actor_ego_dim
 from naigos.rl.networks import Actor
 
 CFG = EnvConfig(n_blue=3, n_threat=8, n_threat_active=6, max_steps=40)
@@ -82,8 +81,7 @@ def test_actor_width_mismatch_is_refused():
 
 
 def test_shipped_checkpoint_has_no_edge_features():
-    with open(SHIPPED, "rb") as f:
-        blob = pickle.load(f)
+    blob = load_checkpoint(SHIPPED)
     assert obs_config_from_blob(blob) == {"obs_edge_features": False}
     require_actor_ego_dim(blob["actor"], CFG.replace(**obs_config_from_blob(blob)), SHIPPED)
     assert obs_config_from_blob({"actor": {}}) == {"obs_edge_features": False}

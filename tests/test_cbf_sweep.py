@@ -9,7 +9,6 @@ table would be noise with a margin column next to it.
 from __future__ import annotations
 
 import json
-import pickle
 from pathlib import Path
 
 import jax
@@ -43,6 +42,7 @@ from naigos.rl.cbf_sweep import (
     validate_seeds,
     write_result,
 )
+from naigos.rl.checkpoint import load as load_checkpoint
 from naigos.rl.red_team import RedCurriculum
 
 CKPT = Path("checkpoints/theatre_1000")
@@ -364,8 +364,8 @@ def test_checkpoint_provenance_identifies_the_artefact():
     assert prov["kind"] == "checkpoint"
     assert prov["path"] == str(CKPT)
     assert len(prov["sha256"]) == 64
-    assert prov["bytes"] == CKPT.stat().st_size
-    assert prov["iteration"] == pickle.loads(CKPT.read_bytes())["iter"]
+    assert prov["bytes"] == sum(f.stat().st_size for f in CKPT.rglob("*") if f.is_file())
+    assert prov["iteration"] == load_checkpoint(CKPT)["iter"]
     assert prov["trained_env_cfg"]["n_threat"] == 16
     assert prov["obs_config"] == {"obs_edge_features": False}
     # the env actually flown was rebuilt from the checkpoint, then resized
@@ -400,8 +400,8 @@ def test_an_actor_whose_observation_width_does_not_match_is_refused():
     """A theatre checkpoint has five threat classes. A default `EnvConfig` has
     three, so the threat slot is 12 wide instead of 14 -- a shape mismatch the
     sweep must name rather than measure."""
-    actor = pickle.loads(CKPT.read_bytes())["actor"]
-    blob = {"actor": actor, "env_cfg": pickle.loads(CKPT.read_bytes())["env_cfg"]}
+    actor = load_checkpoint(CKPT)["actor"]
+    blob = {"actor": actor, "env_cfg": load_checkpoint(CKPT)["env_cfg"]}
     require_actor_compatible(actor, env_config_from_blob(blob), str(CKPT))  # fine
     with pytest.raises(SweepConfigError) as e:
         require_actor_compatible(actor, EnvConfig(), str(CKPT))
@@ -410,7 +410,7 @@ def test_an_actor_whose_observation_width_does_not_match_is_refused():
 
 @pytest.mark.skipif(not CKPT.exists(), reason="no shipped checkpoint")
 def test_env_config_from_blob_round_trips_the_trained_configuration():
-    blob = pickle.loads(CKPT.read_bytes())
+    blob = load_checkpoint(CKPT)
     cfg = env_config_from_blob(blob)
     stored = blob["env_cfg"]
     assert cfg.n_blue == stored["n_blue"]
