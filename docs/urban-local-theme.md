@@ -121,7 +121,7 @@ To inspect a city with no credentials, so it can only use the local path:
 ```bash
 env -u NAIGOS_CESIUM_ION_TOKEN -u CESIUM_ION_TOKEN \
   -u NAIGOS_GOOGLE_MAPS_API_KEY -u GOOGLE_MAPS_API_KEY \
-uv run python -m naigos.demo.live --aoi dubai_urban --checkpoint checkpoints/theatre_1000.pkl \
+uv run python -m naigos.demo.live --aoi dubai_urban --checkpoint checkpoints/theatre_1000 \
   --visual urban-presentation --camera urban-overview --open
 ```
 

@@ -51,7 +51,7 @@ uv run python scripts/sweep_cbf.py --quick
 
 # the real thing
 uv run python scripts/sweep_cbf.py \
-    --checkpoint checkpoints/theatre_1000.pkl \
+    --checkpoint checkpoints/theatre_1000 \
     --margin 0 750 1500 3000 6000 \
     --threats 6 12 16 \
     --red-level 0.2 0.6 1.0 \
@@ -71,7 +71,7 @@ from naigos.rl.cbf_sweep import SweepGrid, run_sweep, markdown_summary, write_re
 
 payload = run_sweep(
     grid=SweepGrid(margins=(0.0, 1500.0, 3000.0), threat_counts=(6, 12), red_levels=(0.2, 0.6)),
-    checkpoint="checkpoints/theatre_1000.pkl",
+    checkpoint="checkpoints/theatre_1000",
     n_seeds=32,
     base_seed=20_000,
 )
@@ -167,7 +167,7 @@ actually changed. `load_result` refuses a schema it does not read.
 
 The actor's input widths are functions of the environment config: the ego vector
 is 10 or 14 wide depending on `obs_edge_features`, and each threat slot is
-`9 + len(threat_kinds)` wide. The shipped `checkpoints/theatre_1000.pkl` was
+`9 + len(threat_kinds)` wide. The shipped `checkpoints/theatre_1000` was
 trained on a five-class theatre, so evaluating it against a default synthetic
 `EnvConfig` (three classes) is a shape error, not a worse measurement.
 

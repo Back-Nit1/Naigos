@@ -24,7 +24,7 @@ result; the rest are upgrades.
 
 ### The learning curve that exists today
 
-The shipped `checkpoints/theatre_1000.pkl` — real Owens Valley theatre, 1000
+The shipped `checkpoints/theatre_1000` — real Owens Valley theatre, 1000
 MAPPO-Lagrangian iterations, 64 worlds × 128 steps, CPU, single seed. The red
 curriculum reached level 0.20; the corresponding curve is committed as
 `docs/artifacts/history.json`.
@@ -219,7 +219,7 @@ half-space edge barriers were added; that took infeasibility from 0.41 to 0.23
 and terrain losses to 0.
 
 **Current held-out artifact: the CBF hurts the trained policy's completion.**
-Against `checkpoints/theatre_1000.pkl` on the committed demo seeds:
+Against `checkpoints/theatre_1000` on the committed demo seeds:
 
 | trained policy | CBF off | CBF on |
 | --- | --- | --- |

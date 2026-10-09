@@ -73,7 +73,7 @@ within 25 m at the point the request named.
   within 400 m is taller than 20 m). All over the land-only safe region.
 - **Ambience regions:** the inland dune belt south-east of the city and the open
   desert south of it -- coarse, hand-drawn open land.
-- **Checkpoint:** `theatre_1000.pkl` was trained on `owens_valley`; every Dubai
+- **Checkpoint:** `theatre_1000` was trained on `owens_valley`; every Dubai
   view says **ZERO-SHOT**. Zero-shot rollout (8 worlds x 4 aircraft, seed 999):
   0.438 of sorties survive against 0.188 for the direct route and 0.219 for the
   avoid+nap heuristic -- a small, untrained-on-Dubai sample, not a result. The
@@ -87,20 +87,20 @@ uv run python -m naigos.demo.urban --aoi dubai_urban
 
 # Evidence-grade terrain/LOS viewer.
 uv run python -m naigos.demo.live --aoi dubai_urban \
-  --checkpoint checkpoints/theatre_1000.pkl --visual physics --camera urban-overview --open
+  --checkpoint checkpoints/theatre_1000 --visual physics --camera urban-overview --open
 
 # Dense city presentation; never LOS evidence.
 uv run python -m naigos.demo.live --aoi dubai_urban \
-  --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation \
+  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
   --camera urban-overview --open
 
 # ... with the fictional ambience.
 uv run python -m naigos.demo.live --aoi dubai_urban \
-  --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation \
+  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
   --camera urban-overview --ambience conflict_ambience --visual-seed 7 --open
 
 # A recording and its self-contained replay.
-uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000.pkl \
+uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000 \
   --aoi dubai_urban --worlds 8 --world 1 --out runs/dubai_urban
 uv run python -m naigos.demo.viewer runs/dubai_urban/demo.json --visual urban-presentation \
   --ambience conflict_ambience --visual-seed 7 --open

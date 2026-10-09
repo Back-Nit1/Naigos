@@ -18,7 +18,7 @@ baseline.**
 ## Result
 
 1000 MAPPO-Lagrangian iterations on the cited Owens Valley theatre
-(`checkpoints/theatre_1000.pkl`, shipped). Evaluated on held-out demo seeds, 48 worlds x 4 aircraft, with identical
+(`checkpoints/theatre_1000`, shipped). Evaluated on held-out demo seeds, 48 worlds x 4 aircraft, with identical
 seeds and an identical threat field across all four policies:
 
 | | untrained | **trained** | naive direct route | avoid+nap heuristic |
@@ -82,7 +82,7 @@ uv run naigos-research --aoi <aoi>                # DEM, atmosphere, airfields -
 uv run python -m naigos.demo.urban --aoi <aoi>     # city theatres: the OSM city layer (visual only)
 
 # --- live 3D viewer (http://127.0.0.1:8765) --------------------------------------
-uv run python -m naigos.demo.live --aoi <aoi> --checkpoint checkpoints/theatre_1000.pkl --open
+uv run python -m naigos.demo.live --aoi <aoi> --checkpoint checkpoints/theatre_1000 --open
 #   --visual physics                  evidence-grade terrain/LOS (the default)
 #   --visual urban-presentation       dense 3D city; presentation only
 #   --visual photorealistic           Google 3D Tiles; needs NAIGOS_CESIUM_ION_TOKEN
@@ -94,7 +94,7 @@ uv run python -m naigos.demo.live --aoi <aoi> --checkpoint checkpoints/theatre_1
 #   --smoke-render                    print what it would draw, as JSON, and exit
 
 # --- record a rollout, then a self-contained replay ------------------------------
-uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000.pkl --aoi <aoi> --out runs/<aoi>
+uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000 --aoi <aoi> --out runs/<aoi>
 uv run python -m naigos.demo.viewer runs/<aoi>/demo.json --open
 uv run python -m naigos.demo.viewer runs/<aoi>/demo.json --visual urban-presentation \
     --ambience conflict_ambience --visual-seed 7 --open
@@ -113,7 +113,7 @@ lsof -ti :8765 | xargs kill                        # stop the old viewer, or use
 # Sentinel-2 as the skin if NAIGOS_CESIUM_ION_TOKEN is set, OpenStreetMap if not
 export NAIGOS_CESIUM_ION_TOKEN=...        # optional; never put it on the command line
 uv run python -m naigos.demo.live --aoi tehran_basin \
-    --checkpoint checkpoints/theatre_1000.pkl --visual physics --imagery sentinel2 --open
+    --checkpoint checkpoints/theatre_1000 --visual physics --imagery sentinel2 --open
 ```
 
 Without the token the same command runs keyless on OpenStreetMap, with the
@@ -127,15 +127,15 @@ One command each, from the repo root:
 ```bash
 # Tehran
 uv run python -m naigos.demo.live --aoi tehran_basin \
-    --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation --camera urban-overview --open
+    --checkpoint checkpoints/theatre_1000 --visual urban-presentation --camera urban-overview --open
 
 # Dubai
 uv run python -m naigos.demo.live --aoi dubai_urban \
-    --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation --camera urban-overview --open
+    --checkpoint checkpoints/theatre_1000 --visual urban-presentation --camera urban-overview --open
 
 # Mecca (outer districts only; the historic centre is outside the theatre)
 uv run python -m naigos.demo.live --aoi mecca_urban \
-    --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation --camera urban-overview --open
+    --checkpoint checkpoints/theatre_1000 --visual urban-presentation --camera urban-overview --open
 ```
 
 Add `--ambience conflict_ambience --visual-seed 7` for the fictional distant
@@ -334,12 +334,12 @@ uv run python -m naigos.demo.urban --aoi tehran_basin
 
 # Dense-city presentation mode
 uv run python -m naigos.demo.live --aoi tehran_basin \
-  --checkpoint checkpoints/theatre_1000.pkl \
+  --checkpoint checkpoints/theatre_1000 \
   --visual urban-presentation --camera urban-overview --open
 
 # The same terrain as the physics model; use for LOS evidence
 uv run python -m naigos.demo.live --aoi tehran_basin \
-  --checkpoint checkpoints/theatre_1000.pkl \
+  --checkpoint checkpoints/theatre_1000 \
   --visual physics --camera urban-overview --open
 
 # A self-contained replay of a Tehran recording, city layer embedded
@@ -532,7 +532,7 @@ air-defence disposition, and the guardrail below applies unchanged.
 
 ## Watch a recorded rollout
 
-The trained policy ships with the repo (`checkpoints/theatre_1000.pkl`, 1.9 MB),
+The trained policy ships with the repo (`checkpoints/theatre_1000`, 1.8 MB),
 so nothing has to be trained to see it fly.
 
 ```bash
@@ -543,7 +543,7 @@ uv pip install -e '.[all]'
 uv run naigos-research --aoi owens_valley
 
 # 1. fly the rollouts and log them          (~14 s)
-uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000.pkl
+uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000
 
 # 2. build the 3D replay and open it        (instant; served on 127.0.0.1)
 uv run python -m naigos.demo.viewer runs/demo/demo.json --open
@@ -590,7 +590,7 @@ embedded (and, if wanted, the fictional ambience, generated once from the seed
 and baked into the file so every play shows the same effects):
 
 ```bash
-uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000.pkl \
+uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000 \
     --aoi dubai_urban --worlds 8 --world 1 --out runs/dubai_urban
 uv run python -m naigos.demo.viewer runs/dubai_urban/demo.json \
     --visual urban-presentation --ambience conflict_ambience --visual-seed 7 --open
@@ -686,7 +686,7 @@ from `scripts/train_theatre.py --iterations 1000 --envs 64 --steps 128`
 (~2.5 h on a laptop CPU). Point the demo at any checkpoint it produces:
 
 ```bash
-uv run python -m naigos.demo.replay --checkpoint runs/theatre/ckpt_001000.pkl
+uv run python -m naigos.demo.replay --checkpoint runs/theatre/ckpt_001000
 ```
 
 `env_from_theatre` **raises** rather than silently falling back to synthetic
@@ -714,8 +714,9 @@ producing it and the fate of the job that produced it cannot drift apart:
   code commit, status, termination reason, and one entry per attempt. A remote
   run that times out records *why* here without its identity record changing.
 
-Checkpoints (`ckpt_NNNNNN.pkl`) carry the policy where the demo has always read
-it, plus a `recovery` block holding everything needed to continue training —
+Checkpoints (`ckpt_NNNNNN/`, an Orbax directory -- see next-steps.md G-3) carry
+the policy where the demo has always read it, plus a `recovery` block holding
+everything needed to continue training —
 both optimizer states, the multiplier's optimizer state, the RNG key, the
 curriculum state and the history so far.
 

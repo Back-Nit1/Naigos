@@ -171,7 +171,7 @@ under a rule that needs several is a different run. That is not decided
 silently -- the resume is refused and names both ways forward:
 
 ```
-ckpt_000200.pkl carries no red-curriculum smoothing state (it was written before
+ckpt_000200 carries no red-curriculum smoothing state (it was written before
 the curriculum kept one), and this run is configured with 'window' smoothing and
 min_evaluations=3. Resuming would change what the stored red level 0.35 means [...]
   * run(..., red_curriculum=RedCurriculum.legacy()) to continue under the

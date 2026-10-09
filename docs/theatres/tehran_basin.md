@@ -17,5 +17,5 @@ This file records only how the city standard presents it
 - **Ambience regions:** the high range north of the basin, and the open plains
   south, west and east of the city -- coarse hand-drawn open land, far from the
   urban box. No place, facility or road was consulted.
-- **Checkpoint:** the shipped `theatre_1000.pkl` was trained on `owens_valley`;
+- **Checkpoint:** the shipped `theatre_1000` was trained on `owens_valley`;
   every Tehran view says **zero-shot**.

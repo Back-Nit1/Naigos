@@ -22,7 +22,7 @@ Run any of them (from the repo root):
 
 ```bash
 uv run python -m naigos.demo.live --aoi <aoi> \
-  --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation --camera urban-overview --open
+  --checkpoint checkpoints/theatre_1000 --visual urban-presentation --camera urban-overview --open
 ```
 
 Each viewer serves on `http://127.0.0.1:8765` by default. Pass `--port 8766`
@@ -61,15 +61,15 @@ uv run python -m naigos.demo.urban --aoi <aoi>
 
 # Evidence-grade terrain/LOS viewer (the simulation's own DEM).
 uv run python -m naigos.demo.live --aoi <aoi> \
-  --checkpoint checkpoints/theatre_1000.pkl --visual physics --camera urban-overview --open
+  --checkpoint checkpoints/theatre_1000 --visual physics --camera urban-overview --open
 
 # Dense city presentation; never LOS evidence. Add the fictional ambience if wanted.
 uv run python -m naigos.demo.live --aoi <aoi> \
-  --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation \
+  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
   --camera urban-overview --ambience conflict_ambience --visual-seed 7 --open
 
 # Record a rollout on the theatre, and export a self-contained replay.
-uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000.pkl --aoi <aoi> --out runs/<aoi>
+uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000 --aoi <aoi> --out runs/<aoi>
 uv run python -m naigos.demo.viewer runs/<aoi>/demo.json --visual urban-presentation \
   --ambience conflict_ambience --visual-seed 7 --open
 

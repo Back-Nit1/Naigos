@@ -93,7 +93,7 @@ retries rather than caching it.)
   2.7 km; `street-canyon` sits among the outer streets.
 - **Ambience regions:** the rugged hills west of the districts and the ridges to
   the south -- the far side of the city from the historic centre.
-- **Checkpoint:** `theatre_1000.pkl` was trained on `owens_valley`; every Mecca
+- **Checkpoint:** `theatre_1000` was trained on `owens_valley`; every Mecca
   view says **ZERO-SHOT**. Zero-shot rollout (8 worlds x 4 aircraft, seed 999):
   0.344 of sorties survive against 0.219 for the direct route and 0.375 for the
   avoid+nap heuristic -- a small sample, not a result; the policy loses 12
@@ -108,20 +108,20 @@ uv run python -m naigos.demo.urban --aoi mecca_urban
 
 # Evidence-grade model terrain/LOS
 uv run python -m naigos.demo.live --aoi mecca_urban \
-  --checkpoint checkpoints/theatre_1000.pkl --visual physics --camera valley-overview --open
+  --checkpoint checkpoints/theatre_1000 --visual physics --camera valley-overview --open
 
 # Presentation-only dense city scene
 uv run python -m naigos.demo.live --aoi mecca_urban \
-  --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation \
+  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
   --camera urban-overview --open
 
 # ... with the restrained fictional ambience
 uv run python -m naigos.demo.live --aoi mecca_urban \
-  --checkpoint checkpoints/theatre_1000.pkl --visual urban-presentation \
+  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
   --camera urban-overview --ambience conflict_ambience --ambience-setting sparse --visual-seed 7 --open
 
 # A recording and its self-contained replay
-uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000.pkl \
+uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000 \
   --aoi mecca_urban --worlds 8 --world 1 --out runs/mecca_urban
 uv run python -m naigos.demo.viewer runs/mecca_urban/demo.json --visual urban-presentation --open
 ```

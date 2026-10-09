@@ -203,15 +203,14 @@ against the baselines' iteration-0 entries.
 To evaluate an existing checkpoint on the bank:
 
 ```python
-import pickle
 from naigos.env.flight_env import NaigosEnv
 from naigos.env.theatre_bridge import env_from_theatre
-from naigos.rl.checkpoint import obs_config_from_blob
+from naigos.rl.checkpoint import load as load_checkpoint, obs_config_from_blob
 from naigos.rl.ppo import greedy_policy
 from naigos.rl.red_team import RedCurriculum
 from naigos.rl.train import evaluate_route_bank
 
-blob = pickle.load(open("runs/theatre/ckpt_000800.pkl", "rb"))
+blob = load_checkpoint("runs/theatre/ckpt_000800")
 cfg, hmap, _ = env_from_theatre(n_threat=16, cell_m=1500.0)
 cfg = RedCurriculum().apply(cfg, 0.0).replace(**obs_config_from_blob(blob))
 env = NaigosEnv(cfg, hmap=hmap)
