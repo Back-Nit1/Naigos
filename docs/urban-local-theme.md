@@ -119,7 +119,8 @@ uv run pytest tests/test_urban_layer.py tests/test_city_presentation.py \
 To inspect a city with no credentials, so it can only use the local path:
 
 ```bash
-NAIGOS_CESIUM_ION_TOKEN= CESIUM_ION_TOKEN= NAIGOS_GOOGLE_MAPS_API_KEY= GOOGLE_MAPS_API_KEY= \
+env -u NAIGOS_CESIUM_ION_TOKEN -u CESIUM_ION_TOKEN \
+  -u NAIGOS_GOOGLE_MAPS_API_KEY -u GOOGLE_MAPS_API_KEY \
 uv run python -m naigos.demo.live --aoi dubai_urban --checkpoint checkpoints/theatre_1000.pkl \
   --visual urban-presentation --camera urban-overview --open
 ```
