@@ -594,35 +594,50 @@ declared owner) is more likely to recur than the bug.
 **Done looks like.** A one-line ownership note per package in `docs/STACK.md`
 before any further parallel work.
 
-### G-2 — No CI
-257 tests are collected on the current checkout. The suite is designed for no
-network and no GPU; cache-dependent checks skip cleanly when raw data is absent.
-Nothing runs it automatically.
+### ~~G-2 — No CI~~ — DONE
+The suite is designed for no network and no GPU; cache-dependent checks skip
+cleanly when raw data is absent. `.github/workflows/ci.yml` now runs it on every
+push and PR: Python 3.12, `uv sync --all-extras --frozen`, `pytest -q`, with
+Node installed too so the node-backed JS helper tests actually run instead of
+skipping. The exact test count is no longer hand-typed here or in
+`README.md` -- both defer to `scripts/repo_summary.py`, since a number copied
+into two places is a number that can only ever agree with one of them.
 
-**Done looks like.** A GitHub Actions workflow running `pytest -q` on push, with
-the `data`/`rl` extras installed and the cache-dependent tests skipping cleanly
-when `data_cache/` is absent (they already do).
+### ~~G-3 — Checkpoints are pickles~~ — DONE
+`train.py` pickled the raw param pytree. Fine locally, brittle across JAX or
+Flax versions, and unsafe to load from an untrusted source.
 
-### G-3 — Checkpoints are pickles
-`train.py` pickles the raw param pytree. Fine locally, brittle across JAX or Flax
-versions, and unsafe to load from an untrusted source.
+Replaced with Orbax's `PyTreeCheckpointer` (`naigos/rl/checkpoint.py`): a
+checkpoint is now a directory (`ckpt_NNNNNN/`), written atomically the same way
+the pickle file was. The shipped `checkpoints/theatre_1000` was migrated with
+the one-way converter (`scripts/convert_checkpoint.py`); nothing in this
+codebase reads pickle checkpoints any more. `naigos/demo/scenario.py`'s
+checkpoint-theatre lookup moved from a pinned content hash to a sidecar
+`theatre.json`, because Orbax's own on-disk layout is not deterministic between
+writes of the same data (confirmed empirically: converting the same source
+pickle twice gave two different directory hashes) -- a pinned hash would have
+needed re-pinning on every rewrite, which defeats the point of pinning one.
 
-**Done looks like.** `orbax` checkpointing, or at minimum `safetensors` for the
-arrays plus JSON for the config.
+### ~~G-4 — `EnvConfig` changes force a full recompile~~ — DONE
+Because the config was a static argument, every curriculum promotion rebuilt
+the jitted train step. At the 10-iteration cadence that was a ~2 s cost per
+promotion -- tolerable on a CPU laptop run, wasteful on a GPU run of thousands
+of iterations.
 
-### G-4 — `EnvConfig` changes force a full recompile
-Because the config is a static argument, every curriculum promotion rebuilds the
-jitted train step. At the current cadence that is a ~2 s cost every 10 iterations
-— tolerable now, wasteful on a GPU run of thousands of iterations.
+The red curriculum's annealed knobs (`red_*_scale`, `n_threat_active`) are now
+traced values carried in `EnvState` (`naigos.env.threats.RedScales`) instead of
+`EnvConfig` fields, so a promotion computes a fresh rollout at the new level
+without rebuilding `NaigosEnv` or retracing `train_step` -- see
+`naigos/rl/train.py`'s promotion branch. `train_step` still gets rebuilt when
+the *reward* curriculum's weights change, because those were never an
+`EnvConfig` field and are outside what this item scoped; that rebuild
+saturates to never once `RewardCurriculum.weights_for`'s dial reaches 0 or 1,
+so a late-run promotion now compiles nothing either.
 
-**Done looks like.** Move the curriculum knobs (`red_*_scale`, `n_threat_active`)
-out of the static config into traced arrays carried in `EnvState`, so annealing
-does not retrigger compilation.
-
-**Now measured rather than estimated.** `perf.json` reports `recompiles` and
+**Measured, not estimated.** `perf.json` reports `recompiles` and
 `recompile_s_total`, and those iterations are booked as compilation instead of
-inflating reported throughput. The first GPU run will say what this actually
-costs there; the ~2 s figure above is a CPU estimate.
+inflating reported throughput -- unchanged by this fix, except that there are
+now fewer of them to report.
 
 ### P-1 — Cloud-scheduled candidate learning: BUILT, NOT RUN
 `naigos/pipeline/` plus `naigos/rl/modal_pipeline.py` and `scripts/pipeline.py`

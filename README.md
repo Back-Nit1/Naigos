@@ -654,7 +654,7 @@ feasible filtered action. It is a backstop, not the plan.
 ## Verify it
 
 ```bash
-uv run pytest -q                    # ~1,100 tests; no network or GPU
+uv run pytest -q                    # the whole suite; no network or GPU (count: scripts/repo_summary.py)
 uv run pytest tests/test_invariant.py -q      # blue has no weapon
 uv run pytest tests/test_verifier_cmdp.py -q  # constraints, pure NumPy
 uv run pytest tests/test_data_chain.py -q     # manifest -> sha256 -> spec -> env
@@ -1020,16 +1020,21 @@ naigos/demo/      replay.py (logged rollouts), live.py + assets/cesium.html
                   presentation.py (resolves all of that once per run)
 components/       one cited JSON per design decision and per data source
 data_cache/       ignored raw fetched bytes + local manifest (sha256, licence, URL, fetch time)
-checkpoints/      the shipped trained policy the demo runs from
+checkpoints/      the shipped trained policy the demo runs from (an Orbax
+                  directory, not a pickle file -- see naigos/rl/checkpoint.py)
 scripts/          train_local.py (synthetic), train_theatre.py (cited DEM),
                   build_models.py (regenerate / --check the viewer models),
+                  convert_checkpoint.py (one-way pickle -> Orbax migration),
+                  repo_summary.py (the test count and artifact sizes this
+                  README quotes, computed rather than hand-typed),
                   modal_runs.py (submit / status / logs / cancel / resume /
                   list / fetch / verify Modal runs), pipeline.py (status / promote /
                   pause / resume / retry / seed for the scheduled pipeline), emit helpers
 docs/             DEVLOG.md, DATA.md (provenance), STACK.md, artifacts/,
                   theatres/ (one doc and one provenance doc per city theatre)
-tests/            ~1,100 collected tests; offline, no GPU; fixtures/ holds each
-                  city theatre's coarse DEM and viewer terrain grid
+tests/            1,456 collected tests (`uv run python scripts/repo_summary.py`
+                  to recount); offline, no GPU; fixtures/ holds each city
+                  theatre's coarse DEM and viewer terrain grid
 ```
 
 ## Honesty check
