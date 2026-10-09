@@ -38,6 +38,7 @@ import numpy as np
 from ..env import config as env_config
 from ..env.config import EnvConfig
 from ..env.flight_env import NaigosEnv
+from ..env.threats import red_scales_from_cfg
 from . import checkpoint as ckpt
 from . import runmeta
 from .ppo import PPOConfig, greedy_policy, init_learner, init_rollout, make_train
@@ -694,11 +695,14 @@ def run(
             )
             return learner, history
 
-    def fresh_rollout(env, it):
+    def fresh_rollout(env, it, red_scales=None):
         # Keyed on (seed, iteration) and kept off the main key chain, so a resume
         # is reproducible and draws the same per-iteration keys as the original.
-        return init_rollout(env, ppo_cfg, jax.random.fold_in(jax.random.PRNGKey(train_cfg.seed), it))
+        return init_rollout(
+            env, ppo_cfg, jax.random.fold_in(jax.random.PRNGKey(train_cfg.seed), it), red_scales
+        )
 
+    train_weights = weights
     train_step = jax.jit(make_train(env, ppo_cfg, weights))
     # On --resume the rollout is re-initialised, not checkpointed.
     rollout = fresh_rollout(env, start_iter)
@@ -862,18 +866,27 @@ def run(
             weights, sw, ew = rew_cur.weights_for(base_w, shootdown_rate)
             if new_level != level:
                 level = new_level
-                cfg = red_cur.apply(env_cfg, level)
-                env = NaigosEnv(cfg, hmap=hmap)
-                rollout = fresh_rollout(env, it)  # the threat config changed
-                # config changed shape-compatibly, so the params carry over;
-                # the jitted step must be rebuilt because cfg is static.
+                # The red curriculum's annealed knobs are traced EnvState, not
+                # EnvConfig fields `env` closes over (next-steps.md G-4), so a
+                # promotion needs a fresh rollout at the new level -- in-flight
+                # episodes are discarded on purpose, the same as before G-4,
+                # because continuing one mid-episode at a different threat
+                # difficulty is not a level either side of the splice was ever
+                # evaluated at -- but neither `env` nor `train_step` needs
+                # rebuilding for this alone.
+                red_scales = red_scales_from_cfg(red_cur.apply(env_cfg, level))
+                rollout = fresh_rollout(env, it, red_scales)
+            # `weights` is still a closure over `train_step` (reward annealing
+            # is not EnvConfig and so is out of G-4's scope), so it still needs
+            # a rebuild when it changes -- which on a real run is most ticks
+            # early on and none once `RewardCurriculum.weights_for` saturates.
+            if weights != train_weights:
+                train_weights = weights
                 train_step = jax.jit(make_train(env, ppo_cfg, weights))
-            else:
-                train_step = jax.jit(make_train(env, ppo_cfg, weights))
-            # Every rebuild costs a full XLA compile (next-steps.md G-4). Mark
-            # the next iteration so its time is booked as compilation rather
-            # than silently inflating the reported throughput.
-            recompiled = True
+                # A rebuild here costs a full XLA compile. Mark the next
+                # iteration so its time is booked as compilation rather than
+                # silently inflating the reported throughput.
+                recompiled = True
 
         if it % train_cfg.checkpoint_every == 0 or it == train_cfg.iterations:
             # `key` is saved at the END of the iteration, after every split this

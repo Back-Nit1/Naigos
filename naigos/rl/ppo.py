@@ -155,13 +155,20 @@ def gae(rewards, values, dones, last_value, gamma, lam):
     return advs, advs + values
 
 
-def init_rollout(env: NaigosEnv, ppo: PPOConfig, key):
+def init_rollout(env: NaigosEnv, ppo: PPOConfig, key, red_scales=None):
     """Fresh batched (n_envs) `(EnvState, Observation)` for a persistent rollout.
 
     `train_step` carries this across iterations, so an episode longer than
     `n_steps` continues into the next segment instead of being cut off.
+
+    `red_scales`, if given, overrides `env.cfg`'s own curriculum fields for
+    every world (next-steps.md G-4) -- how a curriculum promotion starts a new
+    rollout at the new level without rebuilding `env` or retracing `train_step`.
     """
-    return jax.vmap(env.reset)(jax.random.split(key, ppo.n_envs))
+    keys = jax.random.split(key, ppo.n_envs)
+    if red_scales is None:
+        return jax.vmap(env.reset)(keys)
+    return jax.vmap(env.reset, in_axes=(0, None))(keys, red_scales)
 
 
 def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
@@ -197,7 +204,10 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
                 # The max_steps timeout is treated as terminal (not bootstrapped).
                 agent_done = (info["agent_done"] | done).astype(jnp.float32)
                 # auto-reset: a finished world starts a fresh episode in place
-                st_r, ob_r = env.reset(kr)
+                # Carry the ending episode's own red_scales forward (next-steps.md
+                # G-4): a mid-rollout auto-reset must respawn at the level the
+                # rollout is currently annealed to, not silently fall back to cfg's.
+                st_r, ob_r = env.reset(kr, st.red_scales)
                 st2, ob2 = jax.tree.map(lambda a, b: jnp.where(done, a, b), (st_r, ob_r), (st2, ob2))
                 out = dict(
                     ego=ob.ego, threats=ob.threats, threat_mask=ob.threat_mask,

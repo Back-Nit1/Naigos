@@ -40,26 +40,63 @@ class ThreatState(NamedTuple):
     vz: jax.Array  # (T,) m/s vertical velocity, +up. 0 for ground kinds.
 
 
-def kind_param_table(cfg: EnvConfig) -> dict[str, jax.Array]:
+class RedScales(NamedTuple):
+    """The red curriculum's annealed knobs (next-steps.md G-4), as traced
+    values carried in `EnvState` rather than baked into the static `EnvConfig`.
+
+    `EnvConfig.red_detect_scale` etc. used to be the only source: annealing
+    meant `dataclasses.replace`-ing the config, which changes its hash and
+    forces `jax.jit` to retrace and recompile `train_step` on every promotion.
+    These five numbers are the only part of a promotion that ever changes, so
+    carrying them here instead lets one compiled `train_step` serve every red
+    level -- a promotion becomes a value written into the rollout state, not a
+    new trace.
+    """
+
+    detect: jax.Array
+    lethal: jax.Array
+    latency: jax.Array
+    speed: jax.Array
+    n_active: jax.Array  # float32; compared against jnp.arange(T) in `spawn`
+
+
+def red_scales_from_cfg(cfg: EnvConfig) -> RedScales:
+    """`cfg`'s own curriculum fields, as a `RedScales` -- what a fresh
+    `NaigosEnv` starts from absent an explicit override."""
+    return RedScales(
+        detect=jnp.float32(cfg.red_detect_scale),
+        lethal=jnp.float32(cfg.red_lethal_scale),
+        latency=jnp.float32(cfg.red_latency_scale),
+        speed=jnp.float32(cfg.red_speed_scale),
+        n_active=jnp.float32(cfg.n_threat_active),
+    )
+
+
+def kind_param_table(cfg: EnvConfig, scales: RedScales | None = None) -> dict[str, jax.Array]:
     """(N_THREAT_KINDS,) arrays, one per ThreatKindConfig field, with the red
     curriculum scales already applied.
 
     The curriculum (prompt.md s4 v2) turns red difficulty up by scaling these:
     longer detection reach, tighter lethal envelope, faster reaction, faster
-    interceptors. Annealing happens by rebuilding EnvConfig, so the table is
-    static per-config and costs nothing at runtime.
+    interceptors. `scales` defaults to `cfg`'s own fields -- every one-off
+    caller (the demo, `scripts/`, tests) still just passes `cfg`. The hot
+    training path (`naigos.env.flight_env`) passes the traced value carried in
+    `EnvState` instead, so annealing it retraces this table rather than
+    recompiling it (next-steps.md G-4).
     """
+    if scales is None:
+        scales = red_scales_from_cfg(cfg)
     table = {f: jnp.array([float(getattr(k, f)) for k in cfg.threat_kinds], dtype=jnp.float32) for f in KIND_FIELDS}
-    table["detect_range"] = table["detect_range"] * cfg.red_detect_scale
-    table["lethal_range"] = table["lethal_range"] * cfg.red_lethal_scale
-    table["reaction_latency"] = table["reaction_latency"] * cfg.red_latency_scale
-    table["speed"] = table["speed"] * cfg.red_speed_scale
+    table["detect_range"] = table["detect_range"] * scales.detect
+    table["lethal_range"] = table["lethal_range"] * scales.lethal
+    table["reaction_latency"] = table["reaction_latency"] * scales.latency
+    table["speed"] = table["speed"] * scales.speed
     return table
 
 
-def per_threat_params(cfg: EnvConfig, kind: jax.Array) -> dict[str, jax.Array]:
+def per_threat_params(cfg: EnvConfig, kind: jax.Array, scales: RedScales | None = None) -> dict[str, jax.Array]:
     """Broadcast the kind table out to (T,) arrays indexed by each threat's kind."""
-    table = kind_param_table(cfg)
+    table = kind_param_table(cfg, scales)
     return {f: table[f][kind] for f in table}
 
 
@@ -89,14 +126,20 @@ def _clamp_altitude(z: jax.Array, ground: jax.Array, params: dict[str, jax.Array
     return jnp.clip(z, lo, hi)
 
 
-def spawn(key: jax.Array, cfg: EnvConfig, hmap: jax.Array, corridor: jax.Array) -> ThreatState:
-    """Place `cfg.n_threat_active` threats; the remainder spawn inactive (padding).
+def spawn(
+    key: jax.Array, cfg: EnvConfig, hmap: jax.Array, corridor: jax.Array,
+    scales: RedScales | None = None,
+) -> ThreatState:
+    """Place `scales.n_active` threats (`cfg.n_threat_active` if `scales` is
+    not given); the remainder spawn inactive (padding).
 
     Threats are biased toward the straight-line corridor between the start and
     the objective so that the naive-direct-route baseline is genuinely punished
     and the policy has something to route around. `corridor` is (2, 3): the mean
     start point and the mean objective.
     """
+    if scales is None:
+        scales = red_scales_from_cfg(cfg)
     T = cfg.n_threat
     k_pos, k_kind, k_off, k_psi = jax.random.split(key, 4)
 
@@ -119,7 +162,7 @@ def spawn(key: jax.Array, cfg: EnvConfig, hmap: jax.Array, corridor: jax.Array) 
     kind = jax.random.choice(k_kind, jnp.arange(cfg.n_threat_kinds, dtype=jnp.int32), shape=(T,), p=w / w.sum())
 
     ground = terrain_mod.sample_height(hmap, cfg.terrain, xy[:, 0], xy[:, 1])
-    params = per_threat_params(cfg, kind)
+    params = per_threat_params(cfg, kind, scales)
     airborne = params["airborne"] > 0.5
 
     # airborne kinds start on station at SPAWN_AGL, but only where the vehicle
@@ -128,7 +171,7 @@ def spawn(key: jax.Array, cfg: EnvConfig, hmap: jax.Array, corridor: jax.Array) 
     z_air = _clamp_altitude(ground + SPAWN_AGL, ground, params)
     z = jnp.where(airborne, z_air, ground + 5.0)
 
-    active = jnp.arange(T) < cfg.n_threat_active
+    active = jnp.arange(T) < scales.n_active
     psi = jax.random.uniform(k_psi, (T,), minval=-jnp.pi, maxval=jnp.pi)
     return ThreatState(
         pos=jnp.stack([xy[:, 0], xy[:, 1], z], axis=-1),
@@ -148,6 +191,7 @@ def vertical_command(
     blue_pos: jax.Array,  # (B, 3)
     blue_alive: jax.Array,  # (B,) bool
     lock: jax.Array,  # (T, B) track quality at the START of the step
+    scales: RedScales | None = None,
 ) -> jax.Array:
     """(T,) commanded vertical rate, m/s, +up. Zero for anything not flying.
 
@@ -167,7 +211,7 @@ def vertical_command(
     climb and descent limits. Deterministic, no state, no lead term: vertical
     lead prediction is Phase 2.
     """
-    params = per_threat_params(cfg, st.kind)
+    params = per_threat_params(cfg, st.kind, scales)
 
     score = jnp.where(blue_alive[None, :], lock, -1.0)  # (T, B)
     tgt = jnp.argmax(score, axis=-1)  # (T,)
@@ -188,6 +232,7 @@ def step(
     psi_cmd: jax.Array,
     speed_cmd: jax.Array,
     vz_cmd: jax.Array | None = None,
+    scales: RedScales | None = None,
 ) -> ThreatState:
     """Advance the threat field one step under commanded heading, speed and
     vertical rate.
@@ -198,7 +243,7 @@ def step(
     pushes the vehicle up rather than through it. `vz_cmd` defaults to level
     flight, which keeps every caller that predates the 3D model working.
     """
-    params = per_threat_params(cfg, st.kind)
+    params = per_threat_params(cfg, st.kind, scales)
     turn_lim = params["turn_rate"] * cfg.dt
     dpsi = jnp.arctan2(jnp.sin(psi_cmd - st.psi), jnp.cos(psi_cmd - st.psi))
     psi = st.psi + jnp.clip(dpsi, -turn_lim, turn_lim)

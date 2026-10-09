@@ -31,7 +31,7 @@ from . import terrain as terrain_mod
 from . import threats as threats_mod
 from .airframe import AircraftState
 from .config import ROUTE_FAMILY_NAMES, TRAIN_ROUTE_CENTERS_DEG, EnvConfig, route_protocol_problems
-from .threats import ThreatState
+from .threats import RedScales, ThreatState, red_scales_from_cfg
 
 # EnvState.route for the legacy placement: due east, family west_east, legacy flag.
 _LEGACY_ROUTE = (0.0, float(ROUTE_FAMILY_NAMES.index("west_east")), 1.0)
@@ -56,6 +56,12 @@ class EnvState(NamedTuple):
     # along the same route, and by per-family evaluation. Nothing in step,
     # reward or observation depends on it.
     route: jax.Array
+    # The red curriculum's annealed knobs, traced rather than read off the
+    # static `cfg` (next-steps.md G-4) -- see `naigos.env.threats.RedScales`.
+    # Carried for the life of the episode and passed on at auto-reset, so a
+    # promotion changes what a *new* episode spawns with, without retracing
+    # anything that was already compiled for a different level.
+    red_scales: RedScales
 
 
 class RewardTerms(NamedTuple):
@@ -95,11 +101,20 @@ class NaigosEnv:
         self.red_policy = red_policy
 
     # ---------------------------------------------------------------- reset --
-    def reset(self, key: jax.Array) -> tuple[EnvState, obs_mod.Observation]:
-        """A fresh episode, with the route drawn as `cfg.route_mode` says."""
-        return self._reset(key, None)
+    def reset(self, key: jax.Array, red_scales: RedScales | None = None) -> tuple[EnvState, obs_mod.Observation]:
+        """A fresh episode, with the route drawn as `cfg.route_mode` says.
 
-    def reset_route(self, key: jax.Array, route: jax.Array) -> tuple[EnvState, obs_mod.Observation]:
+        `red_scales` overrides `cfg`'s own curriculum fields for this episode
+        (next-steps.md G-4); omitted, a fresh episode starts at `cfg`'s levels,
+        exactly as before G-4. The training loop's auto-reset (`naigos.rl.ppo.
+        make_train`) passes the ending episode's own `state.red_scales`, so an
+        annealed level survives a mid-rollout respawn.
+        """
+        return self._reset(key, None, red_scales)
+
+    def reset_route(
+        self, key: jax.Array, route: jax.Array, red_scales: RedScales | None = None,
+    ) -> tuple[EnvState, obs_mod.Observation]:
         """A fresh episode along a GIVEN route: `route` is (2,) [bearing rad, family id].
 
         This is how the frozen route bank is played (`naigos.rl.train.
@@ -109,10 +124,14 @@ class NaigosEnv:
         """
         route = jnp.asarray(route, dtype=jnp.float32)
         bearing = jnp.arctan2(jnp.sin(route[0]), jnp.cos(route[0]))  # same (-pi, pi] as drawn routes
-        return self._reset(key, jnp.stack([bearing, route[1], jnp.float32(0.0)]))
+        return self._reset(key, jnp.stack([bearing, route[1], jnp.float32(0.0)]), red_scales)
 
-    def _reset(self, key: jax.Array, route: jax.Array | None) -> tuple[EnvState, obs_mod.Observation]:
+    def _reset(
+        self, key: jax.Array, route: jax.Array | None, red_scales: RedScales | None = None,
+    ) -> tuple[EnvState, obs_mod.Observation]:
         cfg = self.cfg
+        if red_scales is None:
+            red_scales = red_scales_from_cfg(cfg)
         k_map, k_start, k_obj, k_thr, k_next = jax.random.split(key, 5)
 
         hmap = self.fixed_hmap if self.fixed_hmap is not None else terrain_mod.synthetic_terrain(k_map, cfg.terrain)
@@ -158,7 +177,7 @@ class NaigosEnv:
         objective = jnp.concatenate([obj_xy, (g_obj + 1_000.0)[:, None]], axis=-1)
 
         corridor = jnp.stack([jnp.mean(start, axis=0), jnp.mean(objective, axis=0)], axis=0)
-        tstate = threats_mod.spawn(k_thr, cfg, hmap, corridor)
+        tstate = threats_mod.spawn(k_thr, cfg, hmap, corridor, red_scales)
 
         to_obj = objective - start
         air = AircraftState(
@@ -184,6 +203,7 @@ class NaigosEnv:
             t=jnp.int32(0),
             key=k_next,
             route=route,
+            red_scales=red_scales,
         )
         return state, self.observe(state)
 
@@ -297,7 +317,7 @@ class NaigosEnv:
     # -------------------------------------------------------------- observe --
     def _geometry(self, state: EnvState):
         cfg = self.cfg
-        tparams = threats_mod.per_threat_params(cfg, state.threats.kind)
+        tparams = threats_mod.per_threat_params(cfg, state.threats.kind, state.red_scales)
         det = det_mod.detection_probability(
             state.hmap,
             cfg.terrain,
@@ -357,18 +377,21 @@ class NaigosEnv:
 
         # --- red team moves, using the picture it had at the start of the step -
         psi_cmd, speed_cmd = self.red_policy(
-            k_red, cfg, state.threats, state.air.pos, af_mod.velocity(state.air), state.alive & ~state.reached, state.lock
+            k_red, cfg, state.threats, state.air.pos, af_mod.velocity(state.air), state.alive & ~state.reached,
+            state.lock, state.red_scales,
         )
         # vertical pursuit runs off the SAME start-of-step track picture the red
         # policy just used, so the two channels cannot disagree about which blue
         # is being chased -- or about whether one has been seen at all.
         vz_cmd = threats_mod.vertical_command(
-            cfg, state.threats, state.air.pos, state.alive & ~state.reached, state.lock
+            cfg, state.threats, state.air.pos, state.alive & ~state.reached, state.lock, state.red_scales
         )
-        tstate = threats_mod.step(cfg, state.threats, state.hmap, psi_cmd, speed_cmd, vz_cmd)
+        tstate = threats_mod.step(
+            cfg, state.threats, state.hmap, psi_cmd, speed_cmd, vz_cmd, state.red_scales
+        )
 
         # --- detection against the new geometry -------------------------------
-        tparams = threats_mod.per_threat_params(cfg, tstate.kind)
+        tparams = threats_mod.per_threat_params(cfg, tstate.kind, state.red_scales)
         det = det_mod.detection_probability(
             state.hmap, cfg.terrain, cfg.detection, air.pos, air.psi, tstate.pos, tparams, tstate.active
         )
@@ -452,6 +475,7 @@ class NaigosEnv:
             t=t,
             key=key,
             route=state.route,
+            red_scales=state.red_scales,
         )
 
         agent_done = (~alive) | reached
@@ -546,7 +570,7 @@ class NaigosEnv:
         # and the play area itself is kept. Threats may land outside the box on
         # purpose: an emitter past the border still sees in.
         corridor = jnp.stack([jnp.mean(state.air.pos, axis=0), jnp.mean(state.objective, axis=0)], axis=0)
-        tstate = threats_mod.spawn(k_thr, self.cfg, state.hmap, corridor)
+        tstate = threats_mod.spawn(k_thr, self.cfg, state.hmap, corridor, state.red_scales)
         return state._replace(
             threats=tstate,
             lock=jnp.zeros_like(state.lock),

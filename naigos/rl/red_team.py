@@ -41,6 +41,7 @@ def scripted_red(
     blue_vel: jax.Array,  # (B, 3)
     blue_alive: jax.Array,  # (B,) bool
     lock: jax.Array,  # (T, B) track quality -- red only chases what it senses
+    scales=None,
 ):
     """v1 red. Lead-pursuit onto the highest-track blue contact.
 
@@ -48,8 +49,12 @@ def scripted_red(
     approximation) rather than pure pursuit, because pure pursuit against a
     faster target degenerates into a tail chase the interceptor can never win --
     which would make evasion trivially easy and teach blue nothing.
+
+    `scales` is the traced `RedScales` the episode is carrying (next-steps.md
+    G-4); it defaults to `cfg`'s own fields for the same reason
+    `per_threat_params` does.
     """
-    params = per_threat_params(cfg, threats.kind)
+    params = per_threat_params(cfg, threats.kind, scales)
     T = threats.pos.shape[0]
 
     # pick the best contact per threat: highest lock among living blue
