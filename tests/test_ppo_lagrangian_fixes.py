@@ -261,9 +261,11 @@ def test_checkpoint_schema_rejects_a_pre_accumulator_checkpoint(tmp_path):
     assert "episode_accum" in ck.REQUIRED_RECOVERY_KEYS
     assert ck.CHECKPOINT_SCHEMA >= 3
 
+    import orbax.checkpoint as ocp
+
     legacy_recovery = {k: None for k in ck.REQUIRED_RECOVERY_KEYS if k not in ("cost_accum", "episode_accum")}
-    path = tmp_path / "ckpt_000001.pkl"
-    path.write_bytes(__import__("pickle").dumps({
+    path = tmp_path / "ckpt_000001"
+    ocp.PyTreeCheckpointer().save(path, {
         "schema": 2,
         "actor": jax.device_get(learner.actor.params),
         "critic": jax.device_get(learner.critic.params),
@@ -272,7 +274,7 @@ def test_checkpoint_schema_rejects_a_pre_accumulator_checkpoint(tmp_path):
         "iter": 1,
         "env_cfg": dc.asdict(cfg),
         "recovery": legacy_recovery,
-    }))
+    })
     assert ck.is_resumable(path) is False
 
 
@@ -294,7 +296,7 @@ def test_resume_reproduces_the_accumulators_bit_for_bit(tmp_path):
     assert float(learner.episode_accum) > 0 or float(learner.cost_accum) >= 0
 
     path = ck.save(
-        tmp_path / "ckpt_000001.pkl", learner=learner, key=k, iteration=1, red_level=0.0,
+        tmp_path / "ckpt_000001", learner=learner, key=k, iteration=1, red_level=0.0,
         shootdown_rate=0.0, survival_rate=1.0, survival_w=1.0, efficiency_w=0.0, history=[{"iter": 0}],
         env_cfg=cfg, ppo_cfg=ppo, red_curriculum=RedCurriculum(), reward_curriculum=RewardCurriculum(),
         reward_weights_base=RewardWeights(), wall_s=0.0,

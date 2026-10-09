@@ -5,7 +5,7 @@ of `env.rollout` with the same env, the same seeds and the same threat field --
 only the actor parameters differ. The untrained side is the freshly initialised
 network, not a hand-written strawman.
 
-    python -m naigos.demo.replay --checkpoint runs/theatre1/ckpt_000700.pkl
+    python -m naigos.demo.replay --checkpoint runs/theatre1/ckpt_000700
 
 Produces `demo.json` (the raw trajectories + counters) and, if matplotlib is
 available, a side-by-side plan view over the DEM with the threat envelopes drawn.
@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import pickle
 from pathlib import Path
 
 import jax
@@ -355,8 +354,9 @@ def main(argv=None):
                          "The summary table always covers every world; this only picks the one drawn.")
     a = ap.parse_args(argv)
 
-    with open(a.checkpoint, "rb") as f:
-        ck = pickle.load(f)
+    from ..rl.checkpoint import load as load_checkpoint
+
+    ck = load_checkpoint(a.checkpoint)
 
     if a.synthetic:
         from ..env.config import EnvConfig

@@ -105,7 +105,7 @@ def test_shadow_is_the_default_action():
 
 
 def _ckpt():
-    return {"file": "ckpt_000002.pkl", "sha256": "a" * 64, "iteration": 2}
+    return {"file": "ckpt_000002", "sha256": "a" * 64, "iteration": 2}
 
 
 def _publish(lay, cid, expected, **kw):
@@ -166,7 +166,7 @@ def test_atomic_replace_means_readers_never_see_a_partial_pointer(tmp_path, monk
 
 def test_the_pointer_cannot_name_a_path_outside_its_candidate(tmp_path):
     lay = layout.Layout(tmp_path)
-    for bad in ("../../etc/passwd", "ckpt_1.pkl", None):
+    for bad in ("../../etc/passwd", "ckpt_1", None):
         with pytest.raises(layout.LayoutError):
             promotion.champion_checkpoint_path(lay, {"candidate_id": C1, "checkpoint": {"file": bad}})
 
@@ -214,8 +214,9 @@ def test_refused_when_the_re_run_does_not_reproduce(two):
 
 def test_refused_when_the_checkpoint_changed(two):
     h, _, second = two
-    ckpt = next(h.lay.candidate_dir(second).glob("ckpt_*.pkl"))
-    ckpt.write_bytes(ckpt.read_bytes() + b"\0")
+    ckpt = next(h.lay.candidate_dir(second).glob("ckpt_*"))
+    marker = next(ckpt.rglob("commit_success.txt"))
+    marker.write_bytes(marker.read_bytes() + b"\0")
     e = _refused(h, lambda: worker.promote(h.svc, second, actor="op", rerun_measure=h.measure))
     assert any("checkpoint" in p for p in e.problems)
 
@@ -346,8 +347,8 @@ def test_rollback_repoints_to_an_earlier_generation_as_a_new_one(two):
 def test_rollback_refuses_a_target_whose_artifacts_changed(two):
     h, first, second = two
     worker.promote(h.svc, second, actor="op", rerun_measure=h.measure)
-    ckpt = next(h.lay.candidate_dir(first).glob("ckpt_*.pkl"))
-    ckpt.write_bytes(b"swapped")
+    ckpt = next(h.lay.candidate_dir(first).glob("ckpt_*"))
+    next(ckpt.rglob("commit_success.txt")).write_bytes(b"swapped")
     e = _refused(h, lambda: worker.rollback(h.svc, 1, actor="op"))
     assert any("checkpoint" in p for p in e.problems)
 

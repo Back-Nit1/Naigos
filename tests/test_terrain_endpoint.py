@@ -27,7 +27,7 @@ from naigos.env.flight_env import NaigosEnv  # noqa: E402
 from naigos.env.terrain import sample_height  # noqa: E402
 from naigos.rl.ppo import greedy_policy  # noqa: E402
 
-CKPT = Path("checkpoints/theatre_1000.pkl")
+CKPT = Path("checkpoints/theatre_1000")
 
 
 @pytest.fixture(scope="module")

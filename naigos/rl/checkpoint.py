@@ -30,31 +30,43 @@ silently reset:
     list, so a resume that started with an empty list would truncate the curve
     to the resumed segment.
 
-So the schema-2 checkpoint carries all of it. The top-level `actor`, `critic`,
+So the schema-4 checkpoint carries all of it. The top-level `actor`, `critic`,
 `lam_raw`, `red_level`, `iter` and `env_cfg` keys are kept exactly where they
-were, because `naigos/demo/replay.py` and `naigos/demo/live.py` read
-`pickle.load(f)["actor"]` and a checkpoint format change must not break the
-demo. Everything new lives under `recovery`.
+were, because `naigos/demo/replay.py` and `naigos/demo/live.py` read them
+through `load()`, and a checkpoint format change must not break the demo.
+Everything new lives under `recovery`.
 
 Restoring is grafting, not unpickling live objects: a `TrainState` holds an
 `apply_fn` and an optax `GradientTransformation`, neither of which survives a
-pickle round trip in a form worth trusting. The learner is rebuilt by
+checkpoint round trip in a form worth trusting. The learner is rebuilt by
 `init_learner` and the saved arrays are grafted onto that structure, with the
 pytree structure, shapes and dtypes checked first. A checkpoint whose structure
 does not match the code trying to load it is refused rather than silently
 half-loaded.
+
+**Schema 4 replaced pickle with Orbax** (next-steps.md G-3). `pickle.load` runs
+arbitrary code to reconstruct whatever the bytes claim to be, which makes a
+checkpoint from an untrusted source a code-execution vector, not just a data
+format risk. Orbax's `PyTreeCheckpointer` restores a pytree of plain arrays and
+JSON-safe scalars -- no `__reduce__`, no arbitrary class reconstruction -- and
+it is the JAX ecosystem's own answer to exactly this problem, so there is no
+hand-rolled array format to get subtly wrong. A checkpoint is now a directory
+(`ckpt_NNNNNN/`, written to a temporary name and `os.replace`d into place, same
+atomicity reasoning as before) rather than a single pickle file.
+`scripts/convert_checkpoint.py` migrates a pre-schema-4 pickle one-way; nothing
+in this module reads pickle, by design.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import os
-import pickle
 from pathlib import Path
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+import orbax.checkpoint as ocp
 
 from . import runmeta
 from .ppo import Learner
@@ -62,12 +74,13 @@ from .red_team import RedCurriculum
 from .reward import RewardCurriculum, RewardWeights
 
 #: 1 = the policy-export format written before resume existed. 2 added
-#: `recovery`. 3 adds the lifetime CMDP accumulators (`cost_accum`,
+#: `recovery`. 3 added the lifetime CMDP accumulators (`cost_accum`,
 #: `episode_accum`) that make the measured cost rate invariant to PPO
-#: n_steps -- see `naigos/rl/ppo.py`. `load` reads all three; only 3 can be
-#: resumed from, so a schema-2 checkpoint is refused rather than resumed with
-#: its budget's running rate silently reset to zero.
-CHECKPOINT_SCHEMA = 3
+#: n_steps -- see `naigos/rl/ppo.py`. 4 replaced the pickle file with an Orbax
+#: checkpoint directory (next-steps.md G-3); nothing else about the schema
+#: changed. `load` only understands schema 4; a pre-4 checkpoint must go
+#: through `scripts/convert_checkpoint.py` first.
+CHECKPOINT_SCHEMA = 4
 
 REQUIRED_RECOVERY_KEYS = (
     "iteration",
@@ -137,6 +150,21 @@ def _key_from_record(record: dict):
 # --- pytree grafting --------------------------------------------------------
 
 
+def _retype(template, generic):
+    """Recover a container type Orbax's templateless restore collapsed to plain
+    dict/list (an optax state is a namedtuple; Orbax hands back a list).
+
+    Orbax preserves pytree *flattening order*, just not the container class, so
+    the leaves that came off disk are already in the order `template`'s own
+    fields declare. Repacking under `template`'s treedef recovers the original
+    type exactly -- it is the same trick `_graft` already relies on, run before
+    the structural comparison rather than during it.
+    """
+    return jax.tree_util.tree_unflatten(
+        jax.tree_util.tree_structure(template), jax.tree_util.tree_leaves(generic)
+    )
+
+
 def _graft(fresh, saved, what: str):
     """Put `saved`'s leaves into `fresh`'s structure, or refuse.
 
@@ -166,7 +194,7 @@ def _graft(fresh, saved, what: str):
 
 
 def _to_host(tree):
-    """Pull a pytree back to numpy so the pickle holds no device handles."""
+    """Pull a pytree back to numpy so the checkpoint holds no device handles."""
     return jax.tree.map(lambda x: np.asarray(jax.device_get(x)), tree)
 
 
@@ -198,11 +226,15 @@ def save(
     """Write one checkpoint atomically.
 
     Atomic because the newest checkpoint is exactly the one a killed container
-    was most likely mid-write on. Writing to a temporary name and renaming means
-    a run that dies here loses the *new* checkpoint, not the last good one --
-    the case `runmeta.select_checkpoint` walks backwards for.
+    was most likely mid-write on. Writing to a temporary directory name and
+    renaming means a run that dies here loses the *new* checkpoint, not the
+    last good one -- the case `runmeta.select_checkpoint` walks backwards for,
+    and it means a partially-written checkpoint never appears under its real
+    name at all (`CHECKPOINT_RE` only matches the bare `ckpt_NNNNNN` name).
     """
-    path = Path(path)
+    # Orbax requires an absolute checkpoint path; callers (train.py, CLI tools)
+    # commonly pass a relative one.
+    path = Path(path).resolve()
     blob = {
         # --- unchanged policy-export surface: the demo reads these ---
         "schema": CHECKPOINT_SCHEMA,
@@ -248,11 +280,12 @@ def save(
             "resumed_from": list(resumed_from or []),
         },
     }
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp, "wb") as f:
-        pickle.dump(blob, f, protocol=pickle.HIGHEST_PROTOCOL)
-        f.flush()
-        os.fsync(f.fileno())
+    tmp = path.with_name(path.name + ".tmp")
+    if tmp.exists():
+        import shutil
+
+        shutil.rmtree(tmp)
+    ocp.PyTreeCheckpointer().save(tmp, blob)
     os.replace(tmp, path)
     return path
 
@@ -261,21 +294,24 @@ def save(
 
 
 def load(path: str | os.PathLike) -> dict:
-    with open(path, "rb") as f:
-        blob = pickle.load(f)
+    try:
+        blob = ocp.PyTreeCheckpointer().restore(Path(path).resolve())
+    except Exception as e:
+        raise CheckpointError(f"{path} is not a readable Naigos checkpoint: {e}") from e
     if not isinstance(blob, dict) or "actor" not in blob:
         raise CheckpointError(f"{path} is not a Naigos checkpoint")
     return blob
 
 
 def is_resumable(path: str | os.PathLike) -> bool:
-    """True if this file is a complete, schema-2 checkpoint.
+    """True if this file is a complete, schema-4 checkpoint.
 
     Used as `runmeta.select_checkpoint(..., is_valid=is_resumable)`, so a
-    truncated pickle or a pre-resume policy export is skipped over and the
-    newest genuinely resumable checkpoint is chosen instead of being masked by
-    it. Deliberately swallows every read error: the caller's next candidate is
-    the right response to any of them.
+    checkpoint orphaned mid-write (still named `*.tmp`, so it never reaches
+    here) or a pre-schema-4 pickle is skipped over and the newest genuinely
+    resumable checkpoint is chosen instead of being masked by it. Deliberately
+    swallows every read error: the caller's next candidate is the right
+    response to any of them.
     """
     try:
         blob = load(path)
@@ -288,8 +324,9 @@ def is_resumable(path: str | os.PathLike) -> bool:
         return False
     if any(k not in rec for k in REQUIRED_RECOVERY_KEYS):
         return False
-    # the filename is what `select_checkpoint` sorts on, so it has to agree with
-    # the contents or the "most recent" checkpoint is not the most recent one
+    # the directory name is what `select_checkpoint` sorts on, so it has to
+    # agree with the contents or the "most recent" checkpoint is not the most
+    # recent one
     named = runmeta.checkpoint_iteration(path)
     return named is None or named == rec.get("iteration")
 
@@ -351,21 +388,27 @@ def restore_learner(template: Learner, blob: dict) -> Learner:
     if missing:
         raise CheckpointError(f"checkpoint recovery block is missing {missing}")
 
+    # `load` restores without a template, so an optax state (a namedtuple) came
+    # back as a plain list -- see `_retype`.
+    actor_opt_state = _retype(template.actor.opt_state, rec["actor_opt_state"])
+    critic_opt_state = _retype(template.critic.opt_state, rec["critic_opt_state"])
+    lam_opt_state = _retype(template.lam_opt, rec["lam_opt_state"])
+
     actor = template.actor.replace(
         params=_graft(template.actor.params, rec["actor_params"], "actor parameters"),
-        opt_state=_graft(template.actor.opt_state, rec["actor_opt_state"], "actor optimizer state"),
+        opt_state=_graft(template.actor.opt_state, actor_opt_state, "actor optimizer state"),
         step=jnp.asarray(rec["actor_step"], dtype=jnp.asarray(template.actor.step).dtype),
     )
     critic = template.critic.replace(
         params=_graft(template.critic.params, rec["critic_params"], "critic parameters"),
-        opt_state=_graft(template.critic.opt_state, rec["critic_opt_state"], "critic optimizer state"),
+        opt_state=_graft(template.critic.opt_state, critic_opt_state, "critic optimizer state"),
         step=jnp.asarray(rec["critic_step"], dtype=jnp.asarray(template.critic.step).dtype),
     )
     return Learner(
         actor=actor,
         critic=critic,
         lam_raw=_graft(template.lam_raw, rec["lam_raw"], "lagrange multiplier"),
-        lam_opt=_graft(template.lam_opt, rec["lam_opt_state"], "multiplier optimizer state"),
+        lam_opt=_graft(template.lam_opt, lam_opt_state, "multiplier optimizer state"),
         cost_accum=_graft(template.cost_accum, rec["cost_accum"], "CMDP cost accumulator"),
         episode_accum=_graft(template.episode_accum, rec["episode_accum"], "CMDP episode accumulator"),
     )
@@ -382,8 +425,8 @@ def obs_config_from_blob(blob: dict) -> dict:
     """The observation flags the checkpoint's actor was trained with, as
     `EnvConfig.replace` overrides.
 
-    A checkpoint written before a flag existed (checkpoints/theatre_1000.pkl)
-    does not record it, and was trained without it.
+    A checkpoint written before a flag existed (checkpoints/theatre_1000) does
+    not record it, and was trained without it.
     """
     env_cfg = blob.get("env_cfg") or {}
     return {"obs_edge_features": bool(env_cfg.get("obs_edge_features", False))}

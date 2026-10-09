@@ -154,6 +154,17 @@ def sha256_file(path: str | os.PathLike, chunk: int = 1 << 20) -> str:
     return h.hexdigest()
 
 
+def sha256_path(path: str | os.PathLike) -> str:
+    """`sha256_file` for a file, `tree_digest`'s content hash for a directory.
+
+    A checkpoint is an Orbax directory (next-steps.md G-3), not a single file,
+    so anything fingerprinting one needs both; which one `path` is is a runtime
+    fact, not something every caller should have to branch on.
+    """
+    path = Path(path)
+    return tree_digest(path)["sha256"] if path.is_dir() else sha256_file(path)
+
+
 def tree_files(root: str | os.PathLike) -> list[str]:
     """Every regular file under ``root``, as sorted POSIX relative paths.
 

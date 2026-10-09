@@ -234,7 +234,7 @@ def _good_run(tmp_path: Path, *, iterations=4, launcher="modal", platform="gpu",
         "device": {"platform": platform}, "steady_iteration_s_median": 0.5,
         "env_steps_per_s": 1000.0,
     })
-    (d / f"ckpt_{iterations:06d}.pkl").write_bytes(b"x")
+    (d / f"ckpt_{iterations:06d}").write_bytes(b"x")
     if manifest:
         man = rm.build_manifest(
             run_name="r1", job_id="fc-1", profile="smoke", gpu="A10G", timeout_s=1800,
@@ -258,7 +258,7 @@ def test_a_complete_run_verifies_clean(tmp_path):
 def test_a_truncated_run_does_not_read_as_a_completed_one(tmp_path):
     d = _good_run(tmp_path, iterations=1000)
     rm.write_json(d / rm.HISTORY_FILENAME, [{"iter": 0}, {"iter": 25}])
-    (d / "ckpt_001000.pkl").rename(d / "ckpt_000025.pkl")
+    (d / "ckpt_001000").rename(d / "ckpt_000025")
     problems = rm.verify_run_dir(d)
     assert any("truncated" in p for p in problems)
     assert any("last checkpoint" in p for p in problems)
@@ -298,7 +298,7 @@ def test_two_runs_interleaved_into_one_directory_show_up_as_non_monotonic(tmp_pa
 
 def test_missing_checkpoints_history_and_perf_are_each_reported(tmp_path):
     d = _good_run(tmp_path)
-    (d / "ckpt_000004.pkl").unlink()
+    (d / "ckpt_000004").unlink()
     (d / rm.HISTORY_FILENAME).unlink()
     (d / rm.PERF_FILENAME).unlink()
     problems = " | ".join(rm.verify_run_dir(d))

@@ -1,6 +1,6 @@
 """Live simulation server: steps the env forever and streams it to a browser.
 
-    python -m naigos.demo.live --aoi tehran_basin --checkpoint checkpoints/theatre_1000.pkl
+    python -m naigos.demo.live --aoi tehran_basin --checkpoint checkpoints/theatre_1000
 
 Serves three things on http://localhost:8765 :
 
@@ -54,7 +54,6 @@ from __future__ import annotations
 import argparse
 import base64
 import json
-import pickle
 import threading
 import time
 from collections import deque
@@ -1377,7 +1376,7 @@ def _zone_report(theatre: str | None, cam: dict, urban_summary: dict, presentati
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="naigos.demo.live", description=__doc__)
-    ap.add_argument("--checkpoint", default="checkpoints/theatre_1000.pkl")
+    ap.add_argument("--checkpoint", default="checkpoints/theatre_1000")
     ap.add_argument("--aoi", default="tehran_basin", help="component snapshot under components/aoi/")
     ap.add_argument("--threats", type=int, default=14)
     ap.add_argument("--cell-m", type=float, default=500.0,
@@ -1502,11 +1501,11 @@ def main(argv=None) -> int:
 
     ckpt = Path(a.checkpoint)
     if not ckpt.exists():
-        raise SystemExit(f"{ckpt} not found. Train one, or use the shipped checkpoints/theatre_1000.pkl")
-    with open(ckpt, "rb") as f:
-        blob = pickle.load(f)
+        raise SystemExit(f"{ckpt} not found. Train one, or use the shipped checkpoints/theatre_1000")
+    from ..rl.checkpoint import load as load_checkpoint, obs_config_from_blob, require_actor_ego_dim
+
+    blob = load_checkpoint(ckpt)
     params = blob["actor"]
-    from ..rl.checkpoint import obs_config_from_blob, require_actor_ego_dim
 
     cfg = cfg.replace(**obs_config_from_blob(blob))
     require_actor_ego_dim(params, cfg, ckpt)

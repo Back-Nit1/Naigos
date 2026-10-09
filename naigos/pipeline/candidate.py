@@ -3,7 +3,7 @@
 A candidate is one training run on one snapshot, plus its evaluation and its
 decision. Its directory *is* a run directory in the sense ``naigos.rl.runmeta``
 already understands (``run.json``, ``manifest.json``, ``history.json``,
-``perf.json``, ``theatre.json``, ``ckpt_NNNNNN.pkl``), so the existing
+``perf.json``, ``theatre.json``, ``ckpt_NNNNNN/``), so the existing
 verification, status and resume logic applies unchanged, and three pipeline
 records sit beside them:
 
@@ -95,8 +95,8 @@ def read_record(lay: layout.Layout, cid: str) -> dict | None:
 
 
 def final_checkpoint(cand_dir: Path, iterations: int) -> Path | None:
-    p = cand_dir / f"ckpt_{int(iterations):06d}.pkl"
-    return p if p.is_file() else None
+    p = cand_dir / f"ckpt_{int(iterations):06d}"
+    return p if p.is_dir() else None
 
 
 def verify(lay: layout.Layout, cid: str) -> list[str]:
@@ -133,5 +133,5 @@ def verify(lay: layout.Layout, cid: str) -> list[str]:
         problems.append("the snapshot's content hash is not the one this candidate trained on")
     iters = (((rec.get("training") or {}).get("profile")) or {}).get("iterations")
     if iters and final_checkpoint(d, iters) is None:
-        problems.append(f"no final checkpoint ckpt_{int(iters):06d}.pkl")
+        problems.append(f"no final checkpoint ckpt_{int(iters):06d}")
     return problems

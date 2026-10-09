@@ -26,7 +26,6 @@ rest of the package stays importable (and testable) without it.
 from __future__ import annotations
 
 import math
-import pickle
 from pathlib import Path
 
 from . import config as pcfg
@@ -100,14 +99,15 @@ def checkpoint_entry(path: str | Path) -> dict:
     from ..rl import runmeta
 
     path = Path(path)
-    return {"file": path.name, "sha256": layout.sha256_file(path),
+    return {"file": path.name, "sha256": layout.sha256_path(path),
             "iteration": runmeta.checkpoint_iteration(path)}
 
 
 def load_actor_params(path: str | Path):
     """The actor parameters, where the demo has always read them."""
-    with open(path, "rb") as f:
-        return pickle.load(f)["actor"]
+    from ..rl import checkpoint as ck
+
+    return ck.load(path)["actor"]
 
 
 # --- the JAX part ------------------------------------------------------------------
@@ -127,10 +127,9 @@ def build_env(*, aoi: str, n_blue: int, n_threat: int, cell_m: float, red_level:
     cfg, hmap, _notes = env_from_theatre(aoi=aoi, n_blue=n_blue, n_threat=n_threat, cell_m=cell_m)
     cfg = RedCurriculum().apply(cfg, red_level)
     if checkpoint is not None:
-        from ..rl.checkpoint import obs_config_from_blob, require_actor_ego_dim
+        from ..rl.checkpoint import load as load_checkpoint, obs_config_from_blob, require_actor_ego_dim
 
-        with open(checkpoint, "rb") as f:
-            blob = pickle.load(f)
+        blob = load_checkpoint(checkpoint)
         cfg = cfg.replace(**obs_config_from_blob(blob))
         require_actor_ego_dim(blob["actor"], cfg, checkpoint)
     return NaigosEnv(cfg, hmap=hmap)

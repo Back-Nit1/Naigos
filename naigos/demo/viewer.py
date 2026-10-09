@@ -143,7 +143,7 @@ def main(argv=None) -> int:
     if not src.exists():
         raise SystemExit(
             f"{src} not found. Generate it first:\n"
-            f"  python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000.pkl"
+            f"  python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000"
         )
     out = build(src, Path(a.out) if a.out else None, aoi=a.aoi, visual_mode=a.visual,
                 camera=a.camera, atmosphere=a.atmosphere, ambience=a.ambience,

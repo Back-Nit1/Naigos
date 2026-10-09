@@ -45,7 +45,7 @@ from naigos.rl.cbf_sweep import (
 )
 from naigos.rl.red_team import RedCurriculum
 
-CKPT = Path("checkpoints/theatre_1000.pkl")
+CKPT = Path("checkpoints/theatre_1000")
 
 # A deliberately tiny world. The sweep's correctness is about pairing and
 # bookkeeping, not about statistics, so the tests buy shape and identity checks
@@ -157,7 +157,7 @@ def test_a_callable_policy_without_provenance_is_refused():
 
 def test_a_missing_checkpoint_is_refused_before_anything_is_flown():
     with pytest.raises(SweepConfigError) as e:
-        run_sweep(base_env_cfg=TINY, checkpoint=Path("checkpoints/does-not-exist.pkl"))
+        run_sweep(base_env_cfg=TINY, checkpoint=Path("checkpoints/does-not-exist"))
     assert "not found" in str(e.value)
 
 

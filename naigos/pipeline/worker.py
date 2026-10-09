@@ -184,9 +184,9 @@ def _read_champion_for_eval(svc: Services) -> tuple[dict | None, Path | None, st
         path = promotion.champion_checkpoint_path(svc.lay, pointer)
     except layout.LayoutError as e:
         return pointer, None, str(e)
-    if not path.is_file():
+    if not path.is_dir():
         return pointer, None, f"champion checkpoint {path.name} is missing"
-    if layout.sha256_file(path) != (pointer.get("checkpoint") or {}).get("sha256"):
+    if layout.sha256_path(path) != (pointer.get("checkpoint") or {}).get("sha256"):
         return pointer, None, "champion checkpoint does not hash to the pointer's record"
     return pointer, path, None
 

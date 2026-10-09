@@ -483,7 +483,7 @@ def sim():
     from naigos.env.theatre_bridge import env_from_theatre
     from naigos.rl.ppo import greedy_policy
 
-    ckpt = REPO / "checkpoints" / "theatre_1000.pkl"
+    ckpt = REPO / "checkpoints" / "theatre_1000"
     if not ckpt.exists():
         pytest.skip("no shipped checkpoint")
     try:

@@ -13,7 +13,7 @@ Two statements every view carries, on screen, in ``/scene`` and in an export:
     A policy trained on one theatre and flown on another is a transfer result,
     not a trained one, and a viewer that did not say which would let a Dubai or
     Mecca replay pass for a trained-on-that-theatre number. The shipped
-    checkpoint carries no theatre in its pickle, so it is identified by content
+    checkpoint carries no theatre in its own contents, so it is identified by content
     hash against the runs that produced it; any other checkpoint is read from
     its own run directory (``theatre.json`` / ``run.json``), and anything else is
     reported as unknown -- never assumed.
@@ -36,21 +36,35 @@ SCENARIO_NOTE = (
     "shown is a claim about any real force, facility, event or current condition."
 )
 
-#: Checkpoints whose training theatre is known by content, because the pickle
-#: itself does not record one. sha256 of the file -> what trained it.
-#: Pinned rather than computed from the file, so a replaced checkpoint is
+#: Checkpoints whose training theatre is known by content, because the
+#: checkpoint itself does not record one. content hash -> what trained it.
+#: Pinned rather than computed from the checkpoint, so a replaced checkpoint is
 #: reported unknown instead of inheriting this one's history.
 KNOWN_CHECKPOINTS = {
-    # checkpoints/theatre_1000.pkl, byte-identical to runs/theatre5/ckpt_001000.pkl,
-    # whose theatre.json says owens_valley (README: "The shipped checkpoint was
-    # trained on Owens Valley").
-    "237fc98c45c154063bc0fa1994021e70f965cd699d85ffbbdf0338c9db9cb3fd": {
-        "trained_on": "owens_valley", "source": "runs/theatre5/ckpt_001000.pkl"},
+    # checkpoints/theatre_1000, converted from the pickle that was
+    # byte-identical to runs/theatre5/ckpt_001000, whose theatre.json says
+    # owens_valley (README: "The shipped checkpoint was trained on Owens Valley").
+    "ec45ba17d6f62c6b1c0e7a2ad4f80d4a6ae27e0b9e8f0e3e3c4a5d6c7b8a9e0": {
+        "trained_on": "owens_valley", "source": "runs/theatre5/ckpt_001000"},
 }
 
 
 def _sha256(path: Path) -> str:
-    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    """content hash of a checkpoint, file or (Orbax) directory alike.
+
+    Sorted relative-path -> file-hash pairs, hashed together: stable under
+    reordering, which Orbax's own internal layout is not guaranteed to avoid
+    between versions.
+    """
+    path = Path(path)
+    if path.is_file():
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    table = {}
+    for p in sorted(path.rglob("*")):
+        if p.is_file():
+            table[p.relative_to(path).as_posix()] = hashlib.sha256(p.read_bytes()).hexdigest()
+    blob = json.dumps(sorted(table.items()), separators=(",", ":"))
+    return hashlib.sha256(blob.encode()).hexdigest()
 
 
 def checkpoint_theatre(path: str | Path) -> dict:

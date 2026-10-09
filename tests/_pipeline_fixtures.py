@@ -80,7 +80,9 @@ def fake_runner(calls: list | None = None, *, fail: bool = False, payload: bytes
 # --- an offline stand-in for the deployed app ------------------------------------
 
 import json  # noqa: E402
-import pickle  # noqa: E402
+
+from naigos.rl import checkpoint as _ck  # noqa: E402
+import orbax.checkpoint as _ocp  # noqa: E402
 from datetime import datetime, timedelta, timezone  # noqa: E402
 
 from naigos.pipeline import config as pcfg  # noqa: E402
@@ -100,8 +102,7 @@ def metrics_for(q: float) -> dict:
 
 
 def quality_of(ckpt) -> float:
-    with open(ckpt, "rb") as f:
-        return float(pickle.load(f)["actor"]["quality"])
+    return float(_ck.load(ckpt)["actor"]["quality"])
 
 
 def fake_trainer(qualities: list, *, fail: bool = False, seen_roots: list | None = None):
@@ -120,8 +121,7 @@ def fake_trainer(qualities: list, *, fail: bool = False, seen_roots: list | None
         runmeta.write_json(out_dir / "perf.json", {"device": {"platform": "gpu"},
                                                    "steady_iteration_s_median": 0.1})
         runmeta.write_json(out_dir / "theatre.json", {"aoi": aoi})
-        with open(out_dir / f"ckpt_{iters:06d}.pkl", "wb") as f:
-            pickle.dump({"actor": {"quality": q}}, f)
+        _ocp.PyTreeCheckpointer().save(out_dir / f"ckpt_{iters:06d}", {"actor": {"quality": q}})
         man = runmeta.build_manifest(run_name=out_dir.name, job_id=None, profile=profile["name"],
                                      gpu="A10G", timeout_s=60, max_retries=0, checkpoint_every=1,
                                      code=meta["code"], config=meta["config"],

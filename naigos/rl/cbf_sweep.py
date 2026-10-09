@@ -44,7 +44,7 @@ can be asserted in a test.
 
     payload = run_sweep(
         grid=SweepGrid(margins=(0.0, 1500.0, 3000.0)),
-        checkpoint="checkpoints/theatre_1000.pkl",
+        checkpoint="checkpoints/theatre_1000",
         n_seeds=16,
     )
     print(markdown_summary(payload))

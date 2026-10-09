@@ -40,7 +40,7 @@ from naigos.rl.cbf_sweep import (  # noqa: E402
     write_result,
 )
 
-DEFAULT_CKPT = Path("checkpoints/theatre_1000.pkl")
+DEFAULT_CKPT = Path("checkpoints/theatre_1000")
 DEFAULT_OUT = Path("docs/artifacts/cbf_sweep.json")
 
 

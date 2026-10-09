@@ -316,7 +316,7 @@ def test_provenance_failure_is_a_rejection_not_a_crash(h):
     h.tick("nightly")
     h.drain(limit=1)  # train only
     (cid,) = h.lay.candidate_ids()
-    ckpt = next(h.lay.candidate_dir(cid).glob("ckpt_*.pkl"))
+    ckpt = next(h.lay.candidate_dir(cid).glob("ckpt_*"))
     (h.lay.candidate_dir(cid) / "perf.json").write_text(json.dumps({"device": {"platform": "cpu"}}))
     h.drain()
     d = _decision(h, cid)

@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import pickle
 import shutil
 from pathlib import Path
 
@@ -118,7 +117,7 @@ def test_the_interrupted_run_checkpoints_the_uninterrupted_runs_state(runs):
     """Up to the interruption the two runs are the same run, and the checkpoint
     a resume starts from holds all of it: parameters, both optimizer states, the
     multiplier, its optimizer state and the RNG stream."""
-    a = ck.load(runs["straight_dir"] / f"ckpt_{INTERRUPT_AT:06d}.pkl")["recovery"]
+    a = ck.load(runs["straight_dir"] / f"ckpt_{INTERRUPT_AT:06d}")["recovery"]
     b = ck.load(runs["resumed_ckpt"])["recovery"]
     for key in ("actor_params", "actor_opt_state", "actor_step", "critic_params",
                 "critic_opt_state", "critic_step", "lam_raw", "lam_opt_state"):
@@ -182,11 +181,11 @@ def test_an_uninterrupted_run_is_not_marked_as_resumed(runs):
 
 
 def test_the_resume_chain_records_every_continuation(runs):
-    blob = ck.load(runs["broken_dir"] / f"ckpt_{ITERATIONS:06d}.pkl")
+    blob = ck.load(runs["broken_dir"] / f"ckpt_{ITERATIONS:06d}")
     chain = blob["recovery"]["resumed_from"]
     assert len(chain) == 1
     assert chain[0]["from_iteration"] == INTERRUPT_AT
-    assert chain[0]["checkpoint"] == f"ckpt_{INTERRUPT_AT:06d}.pkl"
+    assert chain[0]["checkpoint"] == f"ckpt_{INTERRUPT_AT:06d}"
 
 
 # --- what is actually in a checkpoint ----------------------------------------
@@ -208,8 +207,8 @@ def test_a_checkpoint_carries_the_complete_recovery_state(runs):
 
 def test_the_checkpoint_still_holds_the_policy_where_the_demo_looks_for_it(runs):
     """`naigos/demo/replay.py` and `naigos/demo/live.py` read
-    `pickle.load(f)["actor"]`. Adding recovery state must not move it."""
-    blob = pickle.loads(Path(runs["resumed_ckpt"]).read_bytes())
+    `checkpoint.load(path)["actor"]`. Adding recovery state must not move it."""
+    blob = ck.load(runs["resumed_ckpt"])
     assert "actor" in blob and "critic" in blob
     assert blob["iter"] == INTERRUPT_AT
     assert isinstance(blob["env_cfg"], dict)
@@ -237,15 +236,18 @@ def test_a_pre_resume_checkpoint_is_refused_rather_than_half_loaded(tmp_path):
     env = NaigosEnv(ENV)
     _, sample_obs = env.reset(key)
     learner = init_learner(key, ENV, PPO, sample_obs)
-    legacy = tmp_path / "ckpt_000010.pkl"
-    legacy.write_bytes(pickle.dumps({
+    import orbax.checkpoint as ocp
+
+    legacy = tmp_path / "ckpt_000010"
+    ocp.PyTreeCheckpointer().save(legacy, {
+        "schema": ck.CHECKPOINT_SCHEMA,
         "actor": jax.device_get(learner.actor.params),
         "critic": jax.device_get(learner.critic.params),
         "lam_raw": float(learner.lam_raw),
         "red_level": 0.0,
         "iter": 10,
         "env_cfg": dataclasses.asdict(ENV),
-    }))
+    })
     assert ck.is_resumable(legacy) is False
     assert ck.latest_resumable(tmp_path) is None
     with pytest.raises(ck.CheckpointError, match="predates resume support"):
@@ -253,20 +255,26 @@ def test_a_pre_resume_checkpoint_is_refused_rather_than_half_loaded(tmp_path):
 
 
 def test_a_truncated_checkpoint_is_skipped_for_the_last_good_one(runs, tmp_path):
-    """A container killed mid-write leaves a newest checkpoint that is a partial
-    pickle. Selecting it would fail the resume; selecting nothing would throw
-    away a run that was perfectly recoverable."""
-    good = Path(runs["resumed_ckpt"]).read_bytes()
-    (tmp_path / "ckpt_000002.pkl").write_bytes(good)
-    (tmp_path / "ckpt_000004.pkl").write_bytes(good[: len(good) // 2])
-    assert ck.latest_resumable(tmp_path).name == "ckpt_000002.pkl"
+    """A container killed mid-write leaves behind a checkpoint directory with
+    some of its content missing (atomicity means it is never under the real
+    `ckpt_NNNNNN` name while still being written, but a copy -- e.g. a partial
+    Volume transfer -- can still land in that state). Selecting it would fail
+    the resume; selecting nothing would throw away a run that was perfectly
+    recoverable."""
+    shutil.copytree(runs["resumed_ckpt"], tmp_path / "ckpt_000002")
+    shutil.copytree(runs["resumed_ckpt"], tmp_path / "ckpt_000004")
+    # Corrupt the newer one: delete its manifest, which orbax needs to find
+    # anything at all.
+    for p in (tmp_path / "ckpt_000004").glob("manifest.ocdbt"):
+        p.unlink()
+    assert ck.latest_resumable(tmp_path).name == "ckpt_000002"
 
 
 def test_a_checkpoint_whose_filename_disagrees_with_its_contents_is_rejected(runs, tmp_path):
-    """`select_checkpoint` sorts on the filename, so a file named for one
-    iteration and holding another makes "most recent" a lie."""
-    misnamed = tmp_path / "ckpt_009999.pkl"
-    misnamed.write_bytes(Path(runs["resumed_ckpt"]).read_bytes())
+    """`select_checkpoint` sorts on the directory name, so a directory named for
+    one iteration and holding another makes "most recent" a lie."""
+    misnamed = tmp_path / "ckpt_009999"
+    shutil.copytree(runs["resumed_ckpt"], misnamed)
     assert ck.is_resumable(misnamed) is False
 
 
@@ -310,8 +318,8 @@ def test_a_checkpoint_from_a_differently_shaped_network_is_refused(runs):
 
 
 def test_resuming_a_checkpoint_already_at_the_declared_end_is_a_no_op(runs, tmp_path):
-    final = tmp_path / "ckpt_000004.pkl"
-    final.write_bytes((Path(runs["broken_dir"]) / f"ckpt_{ITERATIONS:06d}.pkl").read_bytes())
+    final = tmp_path / "ckpt_000004"
+    shutil.copytree(Path(runs["broken_dir"]) / f"ckpt_{ITERATIONS:06d}", final)
     learner, history = run(ENV, PPO, _train_cfg(tmp_path, ITERATIONS), resume_from=final)
     assert [r["iter"] for r in history][-1] == ITERATIONS
     assert _learner_leaves(learner)[0] is not None
@@ -399,7 +407,9 @@ def test_a_resume_continues_the_same_curriculum_state(runs):
 
 def _strip_curriculum_state(src: Path, dst: Path) -> Path:
     """A checkpoint as it would have been written before smoothing existed."""
-    blob = pickle.loads(src.read_bytes())
+    import orbax.checkpoint as ocp
+
+    blob = ck.load(src)
     rec = blob["recovery"]
     rec["history"] = [
         {k: v for k, v in row.items() if not k.startswith("curriculum_")}
@@ -409,7 +419,7 @@ def _strip_curriculum_state(src: Path, dst: Path) -> Path:
         k: v for k, v in rec["red_curriculum"].items()
         if k not in ("smoothing", "window_size", "ewma_alpha", "min_evaluations")
     }
-    dst.write_bytes(pickle.dumps(blob))
+    ocp.PyTreeCheckpointer().save(dst, blob)
     return dst
 
 
@@ -417,7 +427,7 @@ def test_a_pre_smoothing_checkpoint_is_not_silently_reinterpreted(runs, tmp_path
     """The stored `red_level` was produced by a rule under which one evaluation
     could move it. Continuing under a rule that needs several is a different
     run, so the operator has to say which one they meant."""
-    old = _strip_curriculum_state(Path(runs["resumed_ckpt"]), tmp_path / "ckpt_000002.pkl")
+    old = _strip_curriculum_state(Path(runs["resumed_ckpt"]), tmp_path / "ckpt_000002")
     with pytest.raises(CurriculumError, match="no red-curriculum smoothing state"):
         run(ENV, PPO, _train_cfg(tmp_path / "strict", ITERATIONS), resume_from=old)
 
@@ -426,7 +436,7 @@ def test_a_pre_smoothing_checkpoint_resumes_under_either_named_migration(runs, t
     """Both routes the refusal names actually work. `reset` adopts the smoothed
     rule from an empty window; `RedCurriculum.legacy()` continues under the
     single-evaluation rule the checkpoint was trained with."""
-    old = _strip_curriculum_state(Path(runs["resumed_ckpt"]), tmp_path / "ckpt_000002.pkl")
+    old = _strip_curriculum_state(Path(runs["resumed_ckpt"]), tmp_path / "ckpt_000002")
 
     reset_cfg = dataclasses.replace(
         _train_cfg(tmp_path / "reset", ITERATIONS), curriculum_resume="reset"

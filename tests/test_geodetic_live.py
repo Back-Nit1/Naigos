@@ -141,7 +141,7 @@ def test_live_frames_are_wellformed_and_geolocated(theatre):
     from naigos.demo.live import Simulation
     from naigos.rl.ppo import greedy_policy
 
-    ckpt = Path("checkpoints/theatre_1000.pkl")
+    ckpt = Path("checkpoints/theatre_1000")
     if not ckpt.exists():
         pytest.skip("no shipped checkpoint")
     cfg, hmap, notes = theatre
@@ -177,7 +177,7 @@ def test_scene_payload_is_serialisable_and_complete(theatre):
     from naigos.demo.live import Simulation
     from naigos.rl.ppo import greedy_policy
 
-    ckpt = Path("checkpoints/theatre_1000.pkl")
+    ckpt = Path("checkpoints/theatre_1000")
     if not ckpt.exists():
         pytest.skip("no shipped checkpoint")
     cfg, hmap, notes = theatre

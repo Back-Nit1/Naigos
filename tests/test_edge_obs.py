@@ -17,7 +17,7 @@ from naigos.rl.checkpoint import obs_config_from_blob, require_actor_ego_dim
 from naigos.rl.networks import Actor
 
 CFG = EnvConfig(n_blue=3, n_threat=8, n_threat_active=6, max_steps=40)
-SHIPPED = Path(__file__).resolve().parents[1] / "checkpoints" / "theatre_1000.pkl"
+SHIPPED = Path(__file__).resolve().parents[1] / "checkpoints" / "theatre_1000"
 
 # a 100 x 40 km box
 X_MIN, X_MAX, Y_MIN, Y_MAX = 0.0, 100_000.0, 0.0, 40_000.0

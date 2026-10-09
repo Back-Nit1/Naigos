@@ -2705,6 +2705,8 @@ all = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "optax" },
+    { name = "orbax-checkpoint", version = "0.11.39", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "orbax-checkpoint", version = "0.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "plotly" },
     { name = "py3dep" },
     { name = "pytest" },
@@ -2747,6 +2749,8 @@ rl = [
     { name = "jax", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "optax" },
+    { name = "orbax-checkpoint", version = "0.11.39", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "orbax-checkpoint", version = "0.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 
 [package.metadata]
@@ -2759,6 +2763,7 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.24" },
     { name = "numpy", marker = "extra == 'data'", specifier = ">=1.24" },
     { name = "optax", marker = "extra == 'rl'", specifier = ">=0.2" },
+    { name = "orbax-checkpoint", marker = "extra == 'rl'", specifier = ">=0.5" },
     { name = "plotly", marker = "extra == 'demo'", specifier = ">=5.20" },
     { name = "py3dep", marker = "extra == 'research'", specifier = ">=0.16" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.0" },

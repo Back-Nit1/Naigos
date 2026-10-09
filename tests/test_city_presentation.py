@@ -335,7 +335,7 @@ def test_the_simulation_never_names_the_presentation_layer(package):
 
 
 def test_the_shipped_checkpoint_is_zero_shot_everywhere_but_owens_valley():
-    ck = scenario.checkpoint_theatre(REPO / "checkpoints" / "theatre_1000.pkl")
+    ck = scenario.checkpoint_theatre(REPO / "checkpoints" / "theatre_1000")
     assert ck["trained_on"] == "owens_valley"
     for theatre in CITY_KEYS:
         d = scenario.disclosure(ck, theatre)

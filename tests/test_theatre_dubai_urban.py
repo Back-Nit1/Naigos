@@ -254,7 +254,7 @@ def test_the_city_layer_is_bounded_attributed_and_tag_free():
 
 
 def test_the_scene_says_notional_and_zero_shot():
-    ck = scenario.checkpoint_theatre(REPO / "checkpoints" / "theatre_1000.pkl")
+    ck = scenario.checkpoint_theatre(REPO / "checkpoints" / "theatre_1000")
     p = presentation.resolve(AOI, "urban-presentation", ambience="conflict_ambience",
                              visual_seed=3, checkpoint=ck)
     f = p.scene_fields()

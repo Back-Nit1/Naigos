@@ -883,7 +883,7 @@ def run(
             # curricula and the accumulated history -- goes with it; see
             # `naigos/rl/checkpoint.py` for why each one is not optional.
             ckpt.save(
-                out / f"ckpt_{it:06d}.pkl",
+                out / f"ckpt_{it:06d}",
                 learner=learner,
                 key=key,
                 iteration=it,

@@ -391,8 +391,8 @@ def smoke_gate(profile: str, marker: dict | None, commit: str | None) -> str | N
 
 def _checkpoint_iters(directory: Path) -> list[int]:
     out = []
-    for p in directory.glob("ckpt_*.pkl"):
-        stem = p.stem.split("_")[-1]
+    for p in directory.glob("ckpt_*"):
+        stem = p.name.split("_")[-1]
         if stem.isdigit():
             out.append(int(stem))
     return sorted(out)
@@ -1002,7 +1002,7 @@ def release_writer_lock(directory: str | os.PathLike) -> None:
 
 # --- checkpoint selection ----------------------------------------------------
 
-CHECKPOINT_RE = re.compile(r"^ckpt_(\d{6,})\.pkl$")
+CHECKPOINT_RE = re.compile(r"^ckpt_(\d{6,})$")
 
 
 def checkpoint_paths(directory: str | os.PathLike) -> list[Path]:
@@ -1033,15 +1033,21 @@ def select_checkpoint(
 ) -> Path | None:
     """The most recent *valid* checkpoint, or None.
 
-    Walks backwards from the newest rather than trusting it, because the newest
-    is exactly the one a killed process was most likely writing when it died:
-    the file exists, and it is a truncated pickle. `is_valid` defaults to a
-    structural check (present, non-empty); `naigos.rl.checkpoint` passes one
-    that actually unpickles the file and checks its schema, which is the real
-    test and which needs numpy, so it does not live here.
+    A checkpoint is now an Orbax directory (next-steps.md G-3), written to a
+    temporary name and renamed into place, so a process killed mid-write never
+    leaves a directory under the real `ckpt_NNNNNN` name at all -- `is_valid`
+    exists for corruption that atomicity does not catch (a copied or
+    partially-transferred checkpoint), not for in-place truncation. It defaults
+    to a structural check (present, non-empty, file or directory alike -- this
+    module does not otherwise care what a checkpoint is made of);
+    `naigos.rl.checkpoint` passes one that actually restores the checkpoint and
+    checks its schema, which is the real test and which needs numpy and orbax,
+    so it does not live here.
     """
     def _structural(p: Path) -> bool:
         try:
+            if p.is_dir():
+                return any(p.iterdir())
             return p.is_file() and p.stat().st_size > 0
         except OSError:
             return False

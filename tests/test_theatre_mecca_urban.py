@@ -276,7 +276,7 @@ def test_ambience_origins_are_far_from_every_protected_zone():
 
 
 def test_the_scene_says_notional_and_zero_shot_and_uses_the_restrained_profile():
-    ck = scenario.checkpoint_theatre(REPO / "checkpoints" / "theatre_1000.pkl")
+    ck = scenario.checkpoint_theatre(REPO / "checkpoints" / "theatre_1000")
     p = presentation.resolve(AOI, "urban-presentation", ambience="conflict_ambience",
                              visual_seed=2, checkpoint=ck)
     f = p.scene_fields()

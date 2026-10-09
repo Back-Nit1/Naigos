@@ -255,7 +255,7 @@ def test_a_failed_run_keeps_its_artifacts_and_says_why(tmp_path):
     rm.write_json(tmp_path / rm.HISTORY_FILENAME, [{"iter": 0}, {"iter": 50}])
     rm.write_json(tmp_path / rm.PERF_FILENAME, {"device": {"platform": "gpu"},
                                                 "steady_iteration_s_median": 0.2})
-    (tmp_path / "ckpt_000050.pkl").write_bytes(b"x")
+    (tmp_path / "ckpt_000050").write_bytes(b"x")
     rm.write_json(tmp_path / rm.MANIFEST_FILENAME,
                   _manifest(status=rm.FAILED, termination_reason=rm.REASON_EXCEPTION,
                             last_iteration=50, error="RuntimeError: boom"))
@@ -314,7 +314,7 @@ def test_force_takes_a_live_lock_because_sometimes_the_worker_really_is_gone(tmp
 
 
 def _ckpt(directory: Path, it: int, body: bytes = b"payload") -> Path:
-    p = directory / f"ckpt_{it:06d}.pkl"
+    p = directory / f"ckpt_{it:06d}"
     p.write_bytes(body)
     return p
 
@@ -328,7 +328,7 @@ def test_checkpoints_sort_by_iteration_not_lexically(tmp_path):
 def test_the_newest_checkpoint_is_selected(tmp_path):
     for it in (50, 100, 150):
         _ckpt(tmp_path, it)
-    assert rm.select_checkpoint(tmp_path).name == "ckpt_000150.pkl"
+    assert rm.select_checkpoint(tmp_path).name == "ckpt_000150"
 
 
 def test_a_truncated_newest_checkpoint_is_skipped(tmp_path):
@@ -336,7 +336,7 @@ def test_a_truncated_newest_checkpoint_is_skipped(tmp_path):
     mid-write on, so `select_checkpoint` walks backwards rather than trusting it."""
     _ckpt(tmp_path, 100)
     _ckpt(tmp_path, 150, body=b"")
-    assert rm.select_checkpoint(tmp_path).name == "ckpt_000100.pkl"
+    assert rm.select_checkpoint(tmp_path).name == "ckpt_000100"
 
 
 def test_an_empty_directory_selects_nothing(tmp_path):
@@ -349,18 +349,18 @@ def test_a_validator_that_raises_does_not_hide_earlier_checkpoints(tmp_path):
     _ckpt(tmp_path, 20)
 
     def explodes(path: Path) -> bool:
-        if path.name.endswith("000020.pkl"):
+        if path.name.endswith("000020"):
             raise RuntimeError("unpickling blew up")
         return True
 
-    assert rm.select_checkpoint(tmp_path, is_valid=explodes).name == "ckpt_000010.pkl"
+    assert rm.select_checkpoint(tmp_path, is_valid=explodes).name == "ckpt_000010"
 
 
 def test_files_that_are_not_checkpoints_are_ignored(tmp_path):
-    (tmp_path / "ckpt_notanumber.pkl").write_bytes(b"x")
+    (tmp_path / "ckpt_notanumber").write_bytes(b"x")
     (tmp_path / "history.json").write_text("[]")
     _ckpt(tmp_path, 5)
-    assert [p.name for p in rm.checkpoint_paths(tmp_path)] == ["ckpt_000005.pkl"]
+    assert [p.name for p in rm.checkpoint_paths(tmp_path)] == ["ckpt_000005"]
 
 
 # --- resume compatibility ----------------------------------------------------
@@ -554,7 +554,7 @@ def test_a_smoke_run_with_a_failed_preflight_does_not_verify(tmp_path):
     rm.write_json(tmp_path / rm.HISTORY_FILENAME, [{"iter": 0}, {"iter": 3}])
     rm.write_json(tmp_path / rm.PERF_FILENAME,
                   {"device": {"platform": "gpu"}, "steady_iteration_s_median": 0.2})
-    (tmp_path / "ckpt_000003.pkl").write_bytes(b"x")
+    (tmp_path / "ckpt_000003").write_bytes(b"x")
     man = _manifest(profile="smoke", status=rm.COMPLETED,
                     termination_reason=rm.REASON_COMPLETED, last_iteration=3)
     man["preflight"] = {c: {"ok": True} for c in rm.PREFLIGHT_CHECKS}

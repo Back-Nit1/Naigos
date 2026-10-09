@@ -6,8 +6,6 @@ to the minimum that still exercises every branch the pipeline relies on.
 
 from __future__ import annotations
 
-import pickle
-
 import jax
 import pytest
 
@@ -76,9 +74,10 @@ def test_an_incompatible_champion_is_recorded_not_fatal(env_and_params):
 
 
 def test_the_real_record_feeds_the_gates(tmp_path, measured):
-    ckpt = tmp_path / "ckpt_000002.pkl"
-    with open(ckpt, "wb") as f:
-        pickle.dump({"actor": {}}, f)
+    import orbax.checkpoint as ocp
+
+    ckpt = tmp_path / "ckpt_000002"
+    ocp.PyTreeCheckpointer().save(ckpt, {"actor": {}})
     rec = evaluation.build_record(
         candidate_id="c-20260911-nightly-0123456789ab",
         snapshot_rec={"snapshot_id": "s-20260911-0123456789ab", "content": {"sha256": "x"},
