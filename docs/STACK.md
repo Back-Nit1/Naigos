@@ -45,6 +45,10 @@ naigos/rl/train.py -> modal_train.py           naigos/demo/replay.py -> demo.jso
 | benchmarks | `naigos/bench/` | `rl` + `data` | `pytest tests/test_bench_terrain.py` |
 | cloud learning pipeline | `naigos/pipeline/`, `naigos/rl/modal_pipeline.py`, `scripts/pipeline.py` | core (stdlib); Modal to deploy | `pytest tests/test_pipeline_*.py tests/test_research_roots.py` |
 
+`.github/workflows/ci.yml` runs the whole table above on every push and PR --
+Python 3.12, `uv sync --all-extras --frozen`, `pytest -q` -- so "verify with"
+is no longer something only a human runs locally.
+
 ## Key contracts
 
 **Env.** `reset(key) -> (state, obs)` and `step(state, action) -> (state, obs, terms, done, info)`,
@@ -310,7 +314,7 @@ Written by `naigos/pipeline/layout.py`, whose docstring is the reference:
 /pipeline/snapshots/<snapshot-id>/           cache/, components/, DATA.md, snapshot.json (immutable)
 /pipeline/snapshots/.staging/<id>.<attempt>/ a snapshot being built; renamed into place when valid
 /pipeline/candidates/<candidate-id>/         candidate.json, run.json, manifest/history/perf,
-                                             ckpt_*.pkl, evaluation.json, decision.json
+                                             ckpt_*/ (Orbax directory), evaluation.json, decision.json
 /pipeline/champions/current.json             champion pointer: candidate, checkpoint sha256, generation
 /pipeline/champions/history/g<N>.json        every pointer generation (write-once)
 /pipeline/locks/<lease>.json                 mirror of the atomic lease store (modal.Dict)
