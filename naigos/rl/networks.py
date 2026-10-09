@@ -80,11 +80,17 @@ class SetEncoder(nn.Module):
 
 
 class Actor(nn.Module):
-    """Local-observation policy. Diagonal Gaussian over the 3 flight controls.
+    """Local-observation policy. Tanh-squashed Gaussian over the 3 flight controls.
 
     The output dimension is `cfg.action_dim`, which is 3 and stays 3:
     (bank, flight-path angle, throttle). There is no fourth head. Adding one
     would break `tests/test_invariant.py`.
+
+    `mean` is the *pre-squash* location of the base Gaussian, not the action
+    itself -- it is unbounded. The action is `tanh(sample)`, built by
+    `sample_action`/`log_prob` in this module. A `tanh` baked in here (as a
+    clipped-Gaussian policy once had) would double-squash and bias every
+    sample off the true mode; see `sample_action`.
     """
 
     cfg: EnvConfig
@@ -98,7 +104,6 @@ class Actor(nn.Module):
         z = nn.tanh(nn.Dense(self.hidden)(z))
         z = nn.tanh(nn.Dense(self.hidden)(z))
         mean = nn.Dense(self.cfg.action_dim, kernel_init=nn.initializers.orthogonal(0.01))(z)
-        mean = jnp.tanh(mean)
         log_std = self.param("log_std", nn.initializers.constant(-0.5), (self.cfg.action_dim,))
         return mean, jnp.broadcast_to(log_std, mean.shape)
 
@@ -124,17 +129,43 @@ class Critic(nn.Module):
 
 
 def sample_action(mean, log_std, key):
+    """Tanh-squashed Gaussian sample.
+
+    `raw` is the unbounded base-Gaussian draw (what `log_prob` needs); the
+    action is `tanh(raw)`, which is bounded in (-1, 1) by construction --
+    no clipping, so there is no boundary mass piling up at +-1 the way a
+    clipped Gaussian has.
+    """
     std = jnp.exp(log_std)
     eps = jax.random.normal(key, mean.shape)
     raw = mean + std * eps
-    return jnp.clip(raw, -1.0, 1.0), raw
+    return jnp.tanh(raw), raw
 
 
 def log_prob(mean, log_std, raw):
+    """log-density of `tanh(raw)` under a tanh-squashed Gaussian.
+
+    change-of-variables: log p(action) = log N(raw; mean, std) - log|d(tanh)/d(raw)|,
+    and |d(tanh)/d(raw)| = 1 - tanh(raw)**2. The Jacobian term is evaluated as
+    `2*(log(2) - raw - softplus(-2*raw))`, the standard stable rewrite of
+    `log(1 - tanh(raw)**2)` (it is exact, not an approximation: see the
+    derivation in `tests/test_ppo_lagrangian_fixes.py`) -- the naive form
+    underflows to log(0) = -inf for |raw| well past the point where tanh
+    saturates in float32, which a sampled `raw` reaches routinely.
+    """
     var = jnp.exp(2 * log_std)
-    lp = -0.5 * (((raw - mean) ** 2) / var + 2 * log_std + jnp.log(2 * jnp.pi))
-    return jnp.sum(lp, axis=-1)
+    gaussian_lp = -0.5 * (((raw - mean) ** 2) / var + 2 * log_std + jnp.log(2 * jnp.pi))
+    log_jacobian = 2.0 * (jnp.log(2.0) - raw - jax.nn.softplus(-2.0 * raw))
+    return jnp.sum(gaussian_lp - log_jacobian, axis=-1)
 
 
 def entropy(log_std):
+    """Entropy of the base Gaussian, used as the PPO entropy bonus.
+
+    The tanh-squashed distribution has no closed-form entropy; using the base
+    Gaussian's (a biased estimate, independent of the squashing) is the
+    standard choice for a bounded-action PPO entropy bonus -- it still
+    rewards wide exploration in the pre-squash space, which is all the bonus
+    needs to do.
+    """
     return jnp.sum(log_std + 0.5 * jnp.log(2 * jnp.pi * jnp.e), axis=-1)

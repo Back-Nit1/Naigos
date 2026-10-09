@@ -1,0 +1,162 @@
+ ▐▛███▛█   Claude Code v2.1.294
+▝▜██████▀  Sonnet 5 · Claude Pro
+ ▝▝   ▝▝   ~/Naigos
+
+
+❯ Upgrade blue's observation and actor so it can reason about mobile and        
+  airborne threats over time without receiving hidden ground truth.             
+                                                                                
+  Requirements:                                                                 
+  1. Include sensed vertical velocity for airborne threats; do not hard-code vz 
+  to zero.                                                                      
+  2. Add observable relative closure, track age/confidence, and                 
+  last-known-track uncertainty.                                                 
+  3. Replace nearest-only K-threat selection with a deterministic union of      
+  nearest sensed threats and highest observable-risk threats. Do not rank using 
+  information unavailable to blue.                                              
+  4. Add a recurrent actor option, preferably a GRU after the set encoders.     
+  Carry and reset per-agent hidden state through training, evaluation, replay,  
+  respawn, checkpointing, and resume.                                           
+  5. Preserve a feed-forward compatibility mode for old checkpoints, with       
+  explicit schema/version checks.                                               
+  6. Test masking, permutation invariance, hidden-state reset, temporary        
+  terrain masking, JIT/VMAP, and the actor's continued lack of centralized      
+  state.                                                                        
+  7. Add an ablation protocol comparing feed-forward and recurrent policies on  
+  mobile-ground and airborne-interceptor scenario families.                     
+
+⏺ Skill(superpowers:brainstorming)
+  ⎿  Successfully loaded skill
+
+⏺ Classify: architectural. Touch obs schema, actor net,
+  training/eval/replay/checkpoint, ablation protocol — not bounded.
+
+  Explore repo first.
+
+  Searched for 2 patterns, read 3 files (ctrl+o to expand)
+
+⏺ Now networks.py and checkpoint.py.
+
+  Searched for 3 patterns, read 5 files, listed 1 directory, ran 4 shell commands (ctrl+o to expand)
+
+⏺ Good, enough context. Now clarifying questions before presenting design.
+
+⏺ User answered Claude's questions:
+  ⎿  · K-threat selection (requirement 3): union of nearest-sensed and highest 
+     observable-risk threats. What should drive "observable risk" ranking, given
+     blue only has pd/lock/range/envelope radius for sensed or remembered 
+     threats? → Lock x inverse range-to-envelope (Recommended)
+     · Requirement 2 says add last-known-track uncertainty. Should 
+     remembered-but-currently-unsensed threats keep reporting live ground-truth 
+     position/velocity (as now), or freeze to the last-sensed snapshot with 
+     growing uncertainty? → Freeze to last-sensed snapshot (Recommended)
+     · Requirement 7 (ablation protocol): what should it concretely produce? → A
+     runnable eval script + checklist doc (Recommended)
+
+  Searched for 1 pattern (ctrl+o to expand)
+
+⏺ Design, based on repo exploration (naigos/env/obs.py, threats.py,
+  spatial_hash.py, rl/networks.py, rl/ppo.py, rl/checkpoint.py,
+  env/flight_env.py):
+
+  1. Observation: vz, closure, track age/uncertainty
+
+  Add new EnvState per-(threat,blue) fields, updated each step() alongside
+  existing lock/dwell:
+  - track_pos, track_vel (T,B,3): snapshot of threat position/velocity frozen at
+    the last step it was actually sensed (sensed_mask true), held constant
+    otherwise. This fixes an existing leak — "remembered" (locked-but-unsensed)
+    threats currently read live ground-truth position/velocity from ThreatState,
+    which is an oracle. Freezing to last-sensed makes the new uncertainty
+    feature meaningful.
+  - track_age (T,B): seconds since lock last rose from ~0 (track start), reset
+    when lock decays below CONTACT_THRESHOLD.
+  - stale_age (T,B): seconds since last sensed; 0 while currently sensed,
+    increments otherwise.
+
+  New threat_features columns, gated behind a new EnvConfig.obs_track_features: 
+  bool = False flag (same pattern as obs_edge_features, so threat_feat_dim only
+  grows when the flag is on and old checkpoints keep working unflagged):
+  - vz component of tv_e (currently zeroed — table already has ThreatState.vz
+    computed and unused in obs)
+  - closure = -dot(unit(rel), vel_blue - track_vel) (purely observable, from
+    ego-frame quantities)
+  - track_age normalized
+  - uncertainty = 1 - exp(-stale_age/tau) (0 when just sensed, saturating while
+    stale)
+
+  threat_feat_dim = 9 + n_kinds (off) or 13 + n_kinds (on).
+
+  2. K-threat selection: deterministic union
+
+  Split k_threat_obs into k_threat_near (nearest sensed, via existing
+  spatial_hash.topk_neighbours) and k_threat_risk = k_threat_obs - k_threat_near
+  (new field, default half). Risk score = lock * (1 - 
+  clip(range_to_track/lethal_range, 0, 1)) using track_pos/lock, computed over
+  all T threats (brute-force — T is small, no spatial hash needed), masked to
+  active & lock > CONTACT_THRESHOLD, and excluding whatever the nearest-sensed
+  set already picked (via a taken boolean to avoid duplicates). Concatenate the
+  two fixed-width index/mask blocks. Fully static-shape, jit/vmap-safe, no sort
+  over dynamic sets.
+
+  3. Recurrent actor
+
+  Actor gains recurrent: bool, gru_hidden: int. After the existing trunk MLP, an
+  nn.GRUCell updates a per-agent hidden state (n_blue, gru_hidden) before the
+  policy head. Actor.apply always takes/returns a hidden_state argument (width 0
+  when recurrent=False, a pure passthrough — no branching needed by callers,
+  and old feed-forward checkpoints' param pytree is structurally unaffected
+  since no GRU submodule exists when the flag is off).
+  recurrent_actor/gru_hidden move onto PPOConfig (already serialized whole into
+  checkpoints) and get mirrored at the checkpoint's top level (next to
+  obs_edge_features in env_cfg) so demo/replay.py and demo/live.py can
+  reconstruct the right Actor without needing the recovery block.
+
+  4. Hidden-state threading
+
+  One calling convention everywhere: policy(obs, hidden, key) -> (action, 
+  new_hidden). greedy_policy and the PPO sampling policy both adopt it.
+  - ppo.collect's per-world scan carries hidden alongside (state, obs, key);
+    zeroed on the existing whole-world auto-reset (jnp.where(done, ...), same
+    mechanism already used for state/obs).
+  - env.rollout (used by evaluate_route_bank, replay, verifier) gains a hidden
+    carry the same way.
+  - env.respawn (continuous per-agent re-tasking in live.py) zeros exactly the
+    respawned agents' hidden rows, mirroring how it already clears lock/dwell
+    columns via the mask.
+  - demo/replay.py/demo/live.py's Python-level frame loops thread a local hidden
+    variable across iterations, resetting at episode start and at respawn.
+
+  Resume: restore_learner's existing structural _graft check already refuses a
+  mismatched GRU-vs-no-GRU pytree. I'll add a friendlier upfront message (same
+  style as curriculum_compatibility) comparing the checkpoint's recorded
+  recurrent_actor/gru_hidden against the current PPOConfig before the low-level
+  graft error fires.
+
+  5. Tests
+
+  New/extended cases: K-selection masking + dedup correctness, permutation
+  invariance (shuffled threat slots, shuffled agent order) with the new features
+  and with recurrent=True, hidden-state zeroing on respawn and on world
+  auto-reset, a temporary-terrain-masking scenario asserting track_pos freezes
+  and uncertainty rises monotonically then resets on re-acquisition, JIT/vmap
+  compilation of the recurrent path end-to-end, and an extension of
+  test_invariant.py's isolation check — permuting agents (including their hidden
+  rows) must permute the actions identically, proving the GRU still operates
+  strictly per-agent with no cross-agent or centralized leakage.
+
+  6. Ablation protocol
+
+  New naigos/rl/ablation.py: builds two EnvConfig variants (threat spawn_weight
+  biased near-exclusively toward mobile_ground vs. interceptor), loads a
+  feed-forward and a recurrent checkpoint, runs matched fixed-seed batched
+  rollouts through each, and reports shootdown/arrival/survival rate deltas per
+  config. docs/ablation-protocol.md documents how to produce the matched pair of
+  checkpoints (same seed/curriculum, only ppo.recurrent_actor differing) and
+  run the comparison.
+
+  Does this design look right before I write it up as the spec?
+
+✻ Brewed for 4m 4s · done 7:48 PM
+
+※ recap: Goal: redesign blue's observation/actor in Naigos to track mobile/airborne threats over time via a recurrent GRU actor, without ground-truth leaks. Next: waiting on your approval of the design above before I write the spec doc. (disable recaps in /config)

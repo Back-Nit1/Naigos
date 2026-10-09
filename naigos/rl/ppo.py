@@ -7,8 +7,18 @@ out of every loss. The Lagrange multiplier
 prices the CMDP cost channel so "do not get shot down" is a *learned* constraint
 rather than a reward weight somebody guessed.
 
-    L_actor = -(A_reward - lambda * A_cost) * ratio  (clipped)
-    lambda  <- lambda + lr_lambda * (J_cost - budget)   [projected to >= 0]
+    L_actor = -(A_reward - lambda_eff * A_cost) * ratio  (clipped)
+    lambda_eff  = softplus(lambda_raw) + lambda_kp * max(J_cost - budget, 0)
+    lambda_raw <- lambda_raw + lr_lambda * (J_cost - budget)   [integral-only, Adam]
+
+`lambda_eff` is what the actor is actually priced against every iteration: a
+PID controller (Stooke et al.) on the constraint violation, proportional term
+plus integral term, not the integral term alone. `J_cost` is a lifetime rate --
+total losses divided by total completed agent-episodes, accumulated across
+every persistent rollout segment this run has collected (`Learner.cost_accum`,
+`episode_accum`) -- so it is invariant to PPO n_steps instead of being a fresh
+per-segment mean that depends on how many episodes happened to finish inside
+whichever window was just collected.
 
 The multiplier is stored as a softplus pre-activation so it stays non-negative
 without a hard projection step fighting the optimizer.
@@ -70,6 +80,12 @@ class Learner(NamedTuple):
     critic: TrainState
     lam_raw: jnp.ndarray  # softplus pre-activation of the Lagrange multiplier
     lam_opt: Any
+    # Lifetime totals, carried across persistent rollout segments so the
+    # measured cost rate is "total losses / total completed agent-episodes"
+    # rather than a fresh per-segment mean -- see `train_step` and
+    # PPOConfig.cost_budget.
+    cost_accum: jnp.ndarray
+    episode_accum: jnp.ndarray
 
 
 def lam_value(lam_raw):
@@ -114,6 +130,8 @@ def init_learner(key, cfg: EnvConfig, ppo: PPOConfig, sample_obs: Observation) -
         critic=TrainState.create(apply_fn=critic.apply, params=cp, tx=txc),
         lam_raw=lam_raw,
         lam_opt=lam_opt.init(lam_raw),
+        cost_accum=jnp.asarray(0.0, dtype=jnp.float32),
+        episode_accum=jnp.asarray(0.0, dtype=jnp.float32),
     )
 
 
@@ -235,6 +253,33 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
         adv, ret = gae(traj["r"], traj["v"], traj["d"], v_last, ppo.gamma, ppo.gae_lambda)
         adv_c, ret_c = gae(traj["c"], traj["vc"], traj["d"], vc_last, ppo.cost_gamma, ppo.gae_lambda)
 
+        # --- CMDP budget: lifetime totals, not a per-segment mean ---
+        # A per-segment mean of a rare terminal event scales with how many
+        # agent-episodes happened to finish inside this segment, i.e. with
+        # PPO n_steps. Accumulating "total losses" and "total completed
+        # agent-episodes" across every segment this run has ever collected
+        # and reporting their ratio is invariant to that choice. Only samples
+        # that were live going into their terminal step count as a completed
+        # agent-episode (`live`) -- a step replayed after the agent is
+        # already dead/arrived is not a new episode ending.
+        live = traj["live"]
+        cost_accum = learner.cost_accum + jnp.sum(traj["c"] * live)
+        episode_accum = learner.episode_accum + jnp.sum(traj["d"] * live)
+        j_cost = jnp.where(episode_accum > 0, cost_accum / jnp.maximum(episode_accum, 1.0), 0.0)
+        violation = j_cost - ppo.cost_budget
+
+        # --- PID effective lambda: the value that actually prices the actor loss ---
+        # Pure integral control (dual ascent alone) overshoots a constraint
+        # that starts far outside the feasible set and then unwinds slowly;
+        # the proportional term responds to THIS iteration's violation. It is
+        # computed once, from the lambda this iteration started with, and
+        # used for every epoch's actor update below -- not recomputed after
+        # lam_raw's integral update, so the weight a minibatch is trained
+        # against does not change mid-epoch.
+        lam_eff = jnp.clip(
+            lam_value(learner.lam_raw) + ppo.lambda_kp * jnp.maximum(violation, 0.0), 0.0, ppo.lambda_max
+        )
+
         flat = jax.tree.map(lambda x: x.reshape((-1,) + x.shape[3:]) if x.ndim >= 3 else x.reshape(-1), {
             **{k: traj[k] for k in ("ego", "threats", "threat_mask", "friends", "friend_mask", "raw", "logp",
                                     "gs", "live")},
@@ -253,7 +298,7 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
                 idx = jax.lax.dynamic_slice(perm, (i * mb,), (mb,))
                 batch = jax.tree.map(lambda x: x[idx], flat)
                 grads, aux = jax.grad(
-                    lambda ap, cp: loss_fn(ap, cp, lam_value(learner.lam_raw), batch),
+                    lambda ap, cp: loss_fn(ap, cp, lam_eff, batch),
                     argnums=(0, 1), has_aux=True,
                 )(actor.params, critic.params)
                 actor = actor.apply_gradients(grads=grads[0])
@@ -267,29 +312,25 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
             epoch, (learner.actor, learner.critic), jax.random.split(k_shuf, ppo.n_epochs)
         )
 
-        # --- Lagrange multiplier: PI dual ascent on the constraint violation ---
-        j_cost = jnp.mean(jnp.sum(traj["c"], axis=0))  # expected losses per agent-segment
-        violation = j_cost - ppo.cost_budget
+        # --- Lagrange multiplier: integral-only dual ascent on the violation ---
+        # The proportional term above is applied fresh every iteration and
+        # never fed into the optimizer state, so it can vanish the instant
+        # the constraint is satisfied; only the integral term accumulates.
         lam_grad = -violation * jax.nn.sigmoid(learner.lam_raw)  # d(-lam*viol)/d(raw)
         opt = optax.adam(ppo.lr_lambda)
         updates, lam_opt = opt.update(lam_grad, learner.lam_opt, learner.lam_raw)
         lam_raw = optax.apply_updates(learner.lam_raw, updates)
-        # proportional term, applied outside the optimizer so it does not
-        # accumulate state -- it must be able to vanish the moment the
-        # constraint is satisfied.
-        lam_eff = jnp.clip(lam_value(lam_raw) + ppo.lambda_kp * jnp.maximum(violation, 0.0), 0.0, ppo.lambda_max)
         lam_raw = jnp.clip(lam_raw, -10.0, jnp.log(jnp.expm1(ppo.lambda_max)))
 
         # reward-head fit on the live samples, with the values the rollout used
-        live = traj["live"]
         ret_var = masked_mean((ret - masked_mean(ret, live)) ** 2, live)
         err = ret - traj["v"]
         err_var = masked_mean((err - masked_mean(err, live)) ** 2, live)
 
         metrics = {
             "reward": jnp.mean(jnp.sum(traj["r"], axis=0)),
-            "cost": j_cost,
-            "lambda": lam_eff,
+            "cost": j_cost,  # lifetime losses per completed agent-episode
+            "lambda": lam_eff,  # the PID value actually used to train the actor this iteration
             "lambda_integral": lam_value(lam_raw),
             "cost_violation": violation,
             "shootdown_rate": jnp.mean(jnp.sum(traj["shot"], axis=0)),
@@ -302,7 +343,10 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
             "explained_var": jnp.where(ret_var > 0, 1.0 - err_var / jnp.where(ret_var > 0, ret_var, 1.0), 0.0),
             **jax.tree.map(jnp.mean, aux),
         }
-        return Learner(actor=actor, critic=critic, lam_raw=lam_raw, lam_opt=lam_opt), rollout, metrics
+        return Learner(
+            actor=actor, critic=critic, lam_raw=lam_raw, lam_opt=lam_opt,
+            cost_accum=cost_accum, episode_accum=episode_accum,
+        ), rollout, metrics
 
     train_step.collect = collect  # exposed so tests can inspect the raw segment
     train_step.loss_fn = loss_fn  # exposed so tests can check the live mask
@@ -310,11 +354,15 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
 
 
 def greedy_policy(actor_params, cfg: EnvConfig):
-    """Deterministic policy for evaluation and for the demo replay."""
+    """Deterministic policy for evaluation and for the demo replay.
+
+    `mean` is the actor's pre-squash location (see `nets.Actor`); the
+    deterministic action is its mode after squashing, `tanh(mean)`.
+    """
     apply = nets.Actor(cfg).apply
 
     def pol(obs: Observation, key):
         mean, _ = apply(actor_params, obs.ego, obs.threats, obs.threat_mask, obs.friends, obs.friend_mask)
-        return mean
+        return jnp.tanh(mean)
 
     return pol

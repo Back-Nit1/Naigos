@@ -13,6 +13,11 @@ silently reset:
   * **the multiplier's optimizer state.** Same problem on the constraint
     channel, where it matters more: the Lagrange multiplier is an integrator, so
     losing its Adam state loses the accumulated price of the cost constraint.
+  * **the CMDP cost/episode accumulators.** The measured cost rate is "total
+    losses / total completed agent-episodes" across every segment this run has
+    ever collected, not a fresh per-segment mean (see `naigos/rl/ppo.py`).
+    Dropping these at resume would silently reset that lifetime rate to zero
+    and reintroduce the very n_steps-dependence they exist to remove.
   * **the RNG stream.** Every rollout, every minibatch permutation and every
     evaluation draws from one key chain seeded once. Re-seeding at resume makes
     the second half of the run a different sample path, so the run is no longer
@@ -56,9 +61,13 @@ from .ppo import Learner
 from .red_team import RedCurriculum
 from .reward import RewardCurriculum, RewardWeights
 
-#: 1 = the policy-export format written before resume existed. 2 adds
-#: `recovery`. `load` reads both; only 2 can be resumed from.
-CHECKPOINT_SCHEMA = 2
+#: 1 = the policy-export format written before resume existed. 2 added
+#: `recovery`. 3 adds the lifetime CMDP accumulators (`cost_accum`,
+#: `episode_accum`) that make the measured cost rate invariant to PPO
+#: n_steps -- see `naigos/rl/ppo.py`. `load` reads all three; only 3 can be
+#: resumed from, so a schema-2 checkpoint is refused rather than resumed with
+#: its budget's running rate silently reset to zero.
+CHECKPOINT_SCHEMA = 3
 
 REQUIRED_RECOVERY_KEYS = (
     "iteration",
@@ -71,6 +80,8 @@ REQUIRED_RECOVERY_KEYS = (
     "critic_step",
     "lam_raw",
     "lam_opt_state",
+    "cost_accum",
+    "episode_accum",
     "red_level",
     "shootdown_rate",
     "survival_rate",
@@ -213,6 +224,8 @@ def save(
             "critic_step": int(learner.critic.step),
             "lam_raw": np.asarray(jax.device_get(learner.lam_raw)),
             "lam_opt_state": _to_host(learner.lam_opt),
+            "cost_accum": np.asarray(jax.device_get(learner.cost_accum)),
+            "episode_accum": np.asarray(jax.device_get(learner.episode_accum)),
             "red_level": float(red_level),
             # Both curricula are driven by these two measured rates and they are
             # only refreshed at an eval boundary, so they are state, not derived.
@@ -353,6 +366,8 @@ def restore_learner(template: Learner, blob: dict) -> Learner:
         critic=critic,
         lam_raw=_graft(template.lam_raw, rec["lam_raw"], "lagrange multiplier"),
         lam_opt=_graft(template.lam_opt, rec["lam_opt_state"], "multiplier optimizer state"),
+        cost_accum=_graft(template.cost_accum, rec["cost_accum"], "CMDP cost accumulator"),
+        episode_accum=_graft(template.episode_accum, rec["episode_accum"], "CMDP episode accumulator"),
     )
 
 
