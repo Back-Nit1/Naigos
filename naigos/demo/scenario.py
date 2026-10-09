@@ -12,11 +12,10 @@ Two statements every view carries, on screen, in ``/scene`` and in an export:
 ``checkpoint: ... (zero-shot | trained on this theatre | training theatre unknown)``
     A policy trained on one theatre and flown on another is a transfer result,
     not a trained one, and a viewer that did not say which would let a Dubai or
-    Mecca replay pass for a trained-on-that-theatre number. The shipped
-    checkpoint carries no theatre in its own contents, so it is identified by content
-    hash against the runs that produced it; any other checkpoint is read from
-    its own run directory (``theatre.json`` / ``run.json``), and anything else is
-    reported as unknown -- never assumed.
+    Mecca replay pass for a trained-on-that-theatre number. A checkpoint's
+    training theatre is read from its own run directory (``theatre.json`` /
+    ``run.json``) -- ``checkpoints/theatre.json`` for the shipped one -- and
+    anything else is reported as unknown -- never assumed.
 
 Pure Python; imports nothing from the simulation.
 """
@@ -36,25 +35,14 @@ SCENARIO_NOTE = (
     "shown is a claim about any real force, facility, event or current condition."
 )
 
-#: Checkpoints whose training theatre is known by content, because the
-#: checkpoint itself does not record one. content hash -> what trained it.
-#: Pinned rather than computed from the checkpoint, so a replaced checkpoint is
-#: reported unknown instead of inheriting this one's history.
-KNOWN_CHECKPOINTS = {
-    # checkpoints/theatre_1000, converted from the pickle that was
-    # byte-identical to runs/theatre5/ckpt_001000, whose theatre.json says
-    # owens_valley (README: "The shipped checkpoint was trained on Owens Valley").
-    "ec45ba17d6f62c6b1c0e7a2ad4f80d4a6ae27e0b9e8f0e3e3c4a5d6c7b8a9e0": {
-        "trained_on": "owens_valley", "source": "runs/theatre5/ckpt_001000"},
-}
-
-
 def _sha256(path: Path) -> str:
     """content hash of a checkpoint, file or (Orbax) directory alike.
 
-    Sorted relative-path -> file-hash pairs, hashed together: stable under
-    reordering, which Orbax's own internal layout is not guaranteed to avoid
-    between versions.
+    Display-only (the HUD's provenance line), not an identity lookup: Orbax's
+    own on-disk layout is not guaranteed deterministic between writes of the
+    same data, so unlike a single pickle file this cannot be relied on to
+    repeat across a reconversion. Sorted relative-path -> file-hash pairs,
+    hashed together, so it is at least stable under directory listing order.
     """
     path = Path(path)
     if path.is_file():
@@ -74,12 +62,7 @@ def checkpoint_theatre(path: str | Path) -> dict:
     if not p.exists():
         info["evidence"] = "checkpoint file not found"
         return info
-    digest = _sha256(p)
-    info["sha256_12"] = digest[:12]
-    rec = KNOWN_CHECKPOINTS.get(digest)
-    if rec:
-        info.update(trained_on=rec["trained_on"], evidence=f"content hash matches {rec['source']}")
-        return info
+    info["sha256_12"] = _sha256(p)[:12]
     for name in ("theatre.json", "run.json"):
         side = p.parent / name
         if side.exists():

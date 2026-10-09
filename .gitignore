@@ -7,7 +7,9 @@ data_cache/**
 !data_cache/.gitkeep
 runs/
 checkpoints/*
-!checkpoints/theatre_1000.pkl
+!checkpoints/theatre_1000/
+!checkpoints/theatre_1000/**
+!checkpoints/theatre.json
 *.npz
 !tests/fixtures/*.npz
 .DS_Store
