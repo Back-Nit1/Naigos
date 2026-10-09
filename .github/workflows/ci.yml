@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # The suite is offline by design (README.md "the whole suite, offline");
+      # tests/*.py skip cleanly when data_cache/ or node is absent, but the
+      # node-backed JS helper tests (test_urban_layer.py, test_urban_theme_page.py,
+      # test_city_page.py) only actually run -- rather than skip -- with node on
+      # PATH, which setup-node above provides.
+      - name: Install dependencies
+        run: uv sync --all-extras --frozen
+
+      - name: Run the test suite
+        run: uv run pytest -q
