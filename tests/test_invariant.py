@@ -15,7 +15,7 @@ import pytest
 
 from naigos.env import flight_env, obs
 from naigos.env.config import BLUE_ACTION_NAMES, EnvConfig
-from naigos.rl import cbf, networks, ppo, red_team, reward
+from naigos.rl import cbf, networks, policies, ppo, red_team, reward
 
 OFFENSIVE_WORDS = ("fire", "engage", "shoot", "attack", "strike", "weapon", "missile_launch",
                    "suppress", "retaliate", "target_select", "munition")
@@ -48,7 +48,7 @@ def test_env_ignores_any_extra_action_dimension():
     assert jnp.allclose(s1.air.pos, s2.air.pos)
 
 
-@pytest.mark.parametrize("mod", [flight_env, obs, networks, ppo, reward, cbf, red_team])
+@pytest.mark.parametrize("mod", [flight_env, obs, networks, policies, ppo, reward, cbf, red_team])
 def test_no_offensive_capability_in_blue_facing_modules(mod):
     src = inspect.getsource(mod).lower()
     for w in OFFENSIVE_WORDS:
