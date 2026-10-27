@@ -588,6 +588,89 @@ def route_history_scalars(result: dict) -> dict:
     }
 
 
+RESOURCE_EVAL_PROTOCOL = "naigos-resource-eval-v1"
+
+
+def evaluate_resource_bank(
+    env: NaigosEnv,
+    policy,
+    *,
+    training_seeds=(),
+    splits: tuple[str, ...] = ("heldout", "train_reference"),
+    weights: RewardWeights | None = None,
+) -> dict:
+    """Play the frozen resource bank (L1) and report each split by combination.
+
+    Every row fixes its master seed, route and all resource parameters, so the
+    result is a deterministic function of the policy and the base environment.
+    Refuses training seeds inside the reserved ranges, records the bank and
+    base-environment digests, checks each scenario's provenance, and runs the
+    independent NumPy resource verifier (fuel, outcomes, observation, reward,
+    CMDP cost, latent constancy and sampled ranges) over every episode.
+
+    ponytail: one jit per scenario (the realized resource config is static);
+    10 compiles per bank. Batch by config only if bank evaluation gets hot.
+    """
+    from ..env.resource_bank import (
+        assert_resource_bank_disjoint,
+        base_config_digest,
+        config_for_scenario,
+        provenance_problems,
+        resource_bank,
+        resource_protocol,
+    )
+    from . import reward as reward_mod
+    from . import verifier
+
+    if not env.cfg.resource.enabled:
+        raise ValueError("evaluate_resource_bank requires resource-world-v1/endurance")
+    assert_resource_bank_disjoint(training_seeds)
+    weights = weights or RewardWeights()
+    hmap = env.fixed_hmap
+    base_digest = base_config_digest(env.cfg, hmap)
+    result: dict = {"protocol": RESOURCE_EVAL_PROTOCOL, **resource_protocol(base_digest), "problems": []}
+
+    for split in splits:
+        finals, trajs, by_combination = [], [], {}
+        for row in resource_bank(split):
+            cfg = config_for_scenario(env.cfg, row)
+            sub = NaigosEnv(cfg, hmap=hmap, red_policy=env.red_policy)
+            result["problems"] += provenance_problems(cfg, row, base_digest, hmap)
+            key = jax.random.PRNGKey(row.seed)
+            route = jnp.array([np.deg2rad(row.bearing_deg), row.family_id], dtype=jnp.float32)
+            start = np.asarray(sub.reset_route(jax.random.split(key)[0], route)[0].air.pos)
+            final, traj = jax.device_get(jax.jit(lambda k, r: sub.rollout(k, policy, route=r))(key, route))
+            terms = traj["terms"]
+            report = verifier.verify_resource_trace(
+                cfg, traj, start=start, weights=dataclasses.asdict(weights),
+                reward=np.asarray(reward_mod.compute(terms, weights)),
+                cost=np.asarray(reward_mod.constraint_cost(terms)),
+            )
+            one = lambda a: np.asarray(a)[None]  # noqa: E731
+            f1, t1 = jax.tree.map(one, final), jax.tree.map(one, traj)
+            finals.append(f1)
+            trajs.append(t1)
+            by_combination[row.combination] = {
+                "scenario_id": row.scenario_id,
+                "seed": row.seed,
+                **rollout_metrics(f1, t1, 1, cfg.n_blue),
+                "verification": {"ok": report.ok, "mismatches": report.mismatches[:20],
+                                 "total_cost": report.total_cost},
+            }
+        cat = lambda *a: np.concatenate(a, axis=0)  # noqa: E731
+        result[split] = {
+            "n_scenarios": len(by_combination),
+            "aggregate": rollout_metrics(
+                jax.tree.map(cat, *finals), jax.tree.map(cat, *trajs), len(finals), env.cfg.n_blue
+            ),
+            "by_combination": by_combination,
+        }
+    result["verified"] = not result["problems"] and all(
+        c["verification"]["ok"] for s in splits for c in result[s]["by_combination"].values()
+    )
+    return result
+
+
 def run(
     env_cfg: EnvConfig | None = None,
     ppo_cfg: PPOConfig | None = None,
