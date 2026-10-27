@@ -297,13 +297,15 @@ class ResourceVerificationReport:
 
 
 def _resource_observation_numpy(cfg: EnvConfig, pos, psi, speed, fuel, objective,
-                                initial, reserve, multiplier, gates, active):
+                                initial, reserve, gates, active):
     """Independent NumPy implementation of ResourceObservation-v1."""
     af = cfg.airframe
 
+    onboard_multiplier = cfg.resource.onboard_burn_multiplier
+
     def rate(v):
         throttle = np.clip((v - af.v_stall) / (af.v_max - af.v_stall), 0.0, 1.0)
-        return (af.burn_base + af.burn_throttle * throttle) * multiplier
+        return (af.burn_base + af.burn_throttle * throttle) * onboard_multiplier
 
     scale = np.maximum(initial, 1e-3)
     direct_distance = np.linalg.norm(objective[:, :2] - pos[:, :2], axis=-1)
@@ -436,7 +438,7 @@ def verify_resource_trace(cfg: EnvConfig, traj: dict[str, Any], tol: float = 3e-
 
         expected_obs = _resource_observation_numpy(
             cfg, pos[t], psi[t], speed_log[t], fuel_log[t], objective[t], initial[t],
-            reserve[t], multiplier[t], gates[t], active[t],
+            reserve[t], gates[t], active[t],
         )
         oerr = np.abs(expected_obs - observed[t])
         max_obs_error = max(max_obs_error, float(oerr.max()))

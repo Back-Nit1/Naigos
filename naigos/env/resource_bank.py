@@ -111,6 +111,7 @@ def config_for_scenario(cfg: EnvConfig, scenario: ResourceScenario) -> EnvConfig
         model=RESOURCE_WORLD_L1,
         fuel_budget_ratio=(scenario.fuel_budget_ratio, scenario.fuel_budget_ratio),
         reserve_ratio=(scenario.reserve_ratio, scenario.reserve_ratio),
+        onboard_burn_multiplier=old.onboard_burn_multiplier,
         burn_multiplier=(scenario.burn_multiplier, scenario.burn_multiplier),
         gate_lateral_frac=old.gate_lateral_frac,
         gate_arrival_radius=old.gate_arrival_radius,

@@ -248,6 +248,9 @@ class ResourceWorldConfig:
     model: str = RESOURCE_WORLD_BASELINE
     fuel_budget_ratio: tuple[float, float] = (1.25, 2.0)
     reserve_ratio: tuple[float, float] = (0.10, 0.20)
+    # Actor-visible fuel-to-go uses this declared onboard planning estimate,
+    # never the episode's privileged true burn multiplier below.
+    onboard_burn_multiplier: float = 1.0
     burn_multiplier: tuple[float, float] = (0.85, 1.15)
     gate_lateral_frac: float = 0.25
     gate_arrival_radius: float = 2_000.0
@@ -281,6 +284,8 @@ def resource_world_problems(cfg: ResourceWorldConfig) -> list[str]:
         problems.append("resource.gate_lateral_frac must be in [0, 0.5)")
     if cfg.gate_arrival_radius <= 0:
         problems.append("resource.gate_arrival_radius must be positive")
+    if cfg.onboard_burn_multiplier <= 0:
+        problems.append("resource.onboard_burn_multiplier must be positive")
     if len(cfg.active_gate_mask) != N_DIVERSION_GATES or not any(cfg.active_gate_mask):
         problems.append(f"resource.active_gate_mask must enable at least one of {N_DIVERSION_GATES} gates")
     return problems

@@ -119,20 +119,27 @@ def initial_state(cfg: EnvConfig, episode_key, hmap, start, objective, bounds) -
     return air, rs
 
 
-def fuel_to_go(cfg: EnvConfig, air: AircraftState, target: jax.Array, multiplier: jax.Array) -> jax.Array:
+def fuel_to_go(cfg: EnvConfig, air: AircraftState, target: jax.Array, burn_estimate: jax.Array) -> jax.Array:
     distance = jnp.linalg.norm(target[..., :2] - air.pos[..., None, :2], axis=-1)
     speed = jnp.maximum(air.speed[..., None], cfg.airframe.v_stall)
-    return distance / speed * nominal_burn_rate(cfg, speed) * multiplier[..., None]
+    return distance / speed * nominal_burn_rate(cfg, speed) * burn_estimate[..., None]
 
 
 def observation_features(cfg: EnvConfig, air: AircraftState, objective, rs: ResourceState) -> jax.Array:
     """Named L1 resource/gate facts available to the onboard actor only."""
     if not cfg.resource.enabled:
         return jnp.zeros((cfg.n_blue, 0), dtype=jnp.float32)
-    primary_need = fuel_to_go(cfg, air, objective[:, None, :], rs.burn_multiplier)[:, 0]
-    diversion_need = fuel_to_go(cfg, air, rs.diversion_pos, rs.burn_multiplier)
+    # The true episode burn multiplier is privileged simulator state. Planning
+    # margins use one declared nominal onboard estimate; realized fuel remains
+    # observable and can reveal consumption over time without leaking truth at
+    # reset.
+    burn_estimate = jnp.full(
+        (cfg.n_blue,), cfg.resource.onboard_burn_multiplier, dtype=air.fuel.dtype
+    )
+    primary_need = fuel_to_go(cfg, air, objective[:, None, :], burn_estimate)[:, 0]
+    diversion_need = fuel_to_go(cfg, air, rs.diversion_pos, burn_estimate)
     scale = jnp.maximum(rs.initial_fuel, 1e-3)
-    rate = nominal_burn_rate(cfg, air.speed) * rs.burn_multiplier
+    rate = nominal_burn_rate(cfg, air.speed) * burn_estimate
     resource = jnp.stack(
         [
             air.fuel / scale,

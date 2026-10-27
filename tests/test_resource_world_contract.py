@@ -77,19 +77,24 @@ def test_l1_reset_has_fixed_shapes_and_only_three_controls():
 def test_resource_draws_are_deterministic_and_use_independent_local_keys():
     key = jax.random.PRNGKey(22)
     base_cfg = _cfg()
-    base, _ = NaigosEnv(base_cfg).reset(key)
+    base, base_obs = NaigosEnv(base_cfg).reset(key)
     again, _ = NaigosEnv(base_cfg).reset(key)
     for a, b in zip(base.resource, again.resource):
         np.testing.assert_array_equal(a, b)
 
     changed_cfg = _cfg(burn_multiplier=(1.7, 1.7))
-    changed, _ = NaigosEnv(changed_cfg).reset(key)
+    changed, changed_obs = NaigosEnv(changed_cfg).reset(key)
     np.testing.assert_array_equal(base.resource.initial_fuel, changed.resource.initial_fuel)
     np.testing.assert_array_equal(base.resource.reserve_fuel, changed.resource.reserve_fuel)
     np.testing.assert_array_equal(base.resource.diversion_pos, changed.resource.diversion_pos)
     np.testing.assert_array_equal(
         changed.resource.burn_multiplier, np.full(2, 1.7, dtype=np.float32)
     )
+    # True burn uncertainty is privileged. Before any realized consumption,
+    # changing it alone cannot change what the actor sees.
+    np.testing.assert_array_equal(base_obs.ego, changed_obs.ego)
+    np.testing.assert_array_equal(base_obs.threats, changed_obs.threats)
+    np.testing.assert_array_equal(base_obs.friends, changed_obs.friends)
 
 
 def test_l1_reset_step_and_rollout_are_jit_vmap_compatible():
