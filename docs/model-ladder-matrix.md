@@ -110,6 +110,20 @@ instead of blessing the current checkout under an old image. After changing
 code, deploy the clean committed checkout, then run smoke; the worker records
 both the baked source fingerprint and Modal image ID in runtime provenance.
 
+## Interrupted submissions
+
+Every submission writes an atomic receipt under
+`runs/.matrix-submissions/<plan-sha256>.json` before the first spawn and after
+each state transition. Re-running the exact matrix skips cells already recorded
+as submitted. A process interruption or spawn exception leaves the current cell
+as `submitting` or `failed`; it is never retried automatically because a lost
+response does not prove that Modal rejected the request.
+
+After checking Modal and the run manifests, `--continue-after-failure` skips
+those unresolved cells and submits only cells that are still `pending`. It does
+not assert that the failed cell is safe to retry and does not erase its error or
+attempt timestamps from the receipt.
+
 Run names and identities are deterministic. Changing any axis, resolved
 profile, code state, policy contract, theatre policy basis, dataset digest, or
 scenario digest creates a different identity. Duplicate inputs and duplicate

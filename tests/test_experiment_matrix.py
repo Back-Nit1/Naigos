@@ -231,6 +231,77 @@ def test_submit_prices_the_exact_deployed_resource_reservation():
         cli._check_declared_resources_match_deployment(understated, deployed)
 
 
+def test_submission_receipt_skips_successes_and_never_retries_ambiguous_failures(
+    monkeypatch, tmp_path
+):
+    import scripts
+
+    cli = _load_script("model_ladder")
+    monkeypatch.setattr(cli, "MATRIX_RECEIPTS_DIR", tmp_path)
+    monkeypatch.setattr(cli.runmeta, "git_info", lambda _repo: CODE)
+    plan = em.build_plan(
+        _config(
+            theatres=["owens_valley"],
+            seeds=[0, 1, 2],
+            hyperparameters=[{"name": "default", "profile_overrides": {}}],
+        ),
+        code=CODE,
+    )
+    calls = []
+
+    def submit(_profile, name, _meta, _spec, **_kwargs):
+        calls.append(name)
+        if len(calls) == 2:
+            raise RuntimeError("connection lost after spawn request")
+        return f"fc-{len(calls)}"
+
+    fake_modal_runs = SimpleNamespace(
+        SMOKE_TIMEOUT_S=1800,
+        TIMEOUT_S=21600,
+        GPU_KIND="A10G",
+        GPU_COUNT=1,
+        CPU_CORES=2,
+        MEMORY_MIB=4096,
+        _read_volume_json=lambda _path: None,
+        _check_not_live=lambda _name: None,
+        submit_prepared=submit,
+    )
+    monkeypatch.setitem(sys.modules, "scripts.modal_runs", fake_modal_runs)
+    monkeypatch.setattr(scripts, "modal_runs", fake_modal_runs, raising=False)
+
+    with pytest.raises(RuntimeError, match="connection lost"):
+        cli._submit_plan(plan, max_cost_usd=100)
+
+    receipt_path = tmp_path / f"{plan['plan_sha256']}.json"
+    receipt = json.loads(receipt_path.read_text())
+    assert [entry["state"] for entry in receipt["entries"]] == [
+        "submitted", "failed", "pending",
+    ]
+    assert receipt["entries"][0]["job_id"] == "fc-1"
+    assert "connection lost" in receipt["entries"][1]["error"]
+
+    with pytest.raises(SystemExit, match="never retried automatically"):
+        cli._submit_plan(plan, max_cost_usd=100)
+    assert len(calls) == 2
+
+    continued = cli._submit_plan(
+        plan, max_cost_usd=100, continue_after_failure=True
+    )
+    assert calls == [
+        plan["experiments"][0]["run_name"],
+        plan["experiments"][1]["run_name"],
+        plan["experiments"][2]["run_name"],
+    ]
+    assert {record["run_name"] for record in continued} == {
+        plan["experiments"][0]["run_name"],
+        plan["experiments"][2]["run_name"],
+    }
+    receipt = json.loads(receipt_path.read_text())
+    assert [entry["state"] for entry in receipt["entries"]] == [
+        "submitted", "failed", "submitted",
+    ]
+
+
 def test_prepared_submit_uses_verified_smoke_and_writer_gates(monkeypatch):
     mr = _load_script("modal_runs")
     profile = runmeta.resolve_profile("short")
