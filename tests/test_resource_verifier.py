@@ -123,4 +123,3 @@ def test_resource_verifier_does_not_import_jax_resource_implementation():
     source = inspect.getsource(verifier)
     assert "from ..env import resource" not in source
     assert "import jax" not in source
-

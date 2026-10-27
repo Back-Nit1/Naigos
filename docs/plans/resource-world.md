@@ -106,7 +106,21 @@ resource-free control arm.
 
 ## Fixed-shape JAX contract
 
-`baseline-v0` retains the current `EnvState` and `Observation`. The first
+**Amendment (wave 2, L1 MVP).** `baseline-v0` does *not* keep the literal
+`EnvState`/`RewardTerms` treedefs: both are runtime-only NamedTuples and gained
+one trailing neutral field each (`EnvState.resource`, `RewardTerms.diverted`),
+so one jitted code path serves L0 and L1 without a duplicated state class.
+What baseline-v0 preserves is everything persisted or consumed by a trained
+actor: the `Learner` checkpoint pytree (no env state is ever serialized), the
+checkpoint keys the demo reads, `Observation` and the 10/14-wide ego vector,
+all RNG streams, and the transition numerics (baseline never reads the resource
+latents). `tests/test_baseline_contract.py` pins the field lists, round-trips a
+baseline checkpoint, runs the shipped `checkpoints/theatre_1000` on the amended
+runtime, and perturbs every resource latent to show the baseline step ignores it.
+Forward compatibility (new baseline checkpoints on old code) is not claimed:
+`env_cfg` now carries a `resource` entry.
+
+`baseline-v0` retains the current `Observation`, actor and checkpoint layout. The first
 resource rung introduces a new fixed schema and allocates the complete v1
 capacity immediately, even while later resources are disabled. This avoids a
 new actor/checkpoint shape at every rung.
@@ -215,6 +229,16 @@ compute    = fold_in(episode_key, 105)
 weather    = fold_in(episode_key, 106)
 map        = fold_in(episode_key, 107)
 ```
+
+L1 consumes only the `fuel` stream; its budget, reserve, and burn-multiplier
+latents are `fold_in(fuel, 1..3)`, so IDs 102-107 stay free
+(`env.resource.RNG_STREAM_IDS`, `tests/test_resource_rng.py`).
+
+Terminal outcomes are exclusive. Simultaneous events within one step resolve as
+shot > terrain > bounds > fuel > primary > diversion > timeout
+(`env.resource.OUTCOME_PRECEDENCE`); the env refuses arrival/diversion on a loss
+step. Raw per-event flags stay in `RewardTerms`, while metrics, the verifier and
+replay count the exclusive outcome and report `raw_*` rates beside it.
 
 Per-step draws are `fold_in(resource_key, t)`. Enabling communications must not
 change the fuel, weather, threat, or kill draws for the same master scenario.

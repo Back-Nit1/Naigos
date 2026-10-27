@@ -109,4 +109,3 @@ def test_reserve_divert_reaches_recovery_when_direct_route_runs_dry():
     )
     assert int(high_trace["terms"].out_of_fuel.sum()) == 0
     assert bool(high_final.reached[0])
-

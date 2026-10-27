@@ -36,6 +36,7 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..env import config as env_config
+from ..env import resource as resource_mod
 from ..env.config import EnvConfig
 from ..env.flight_env import NaigosEnv
 from ..env.threats import red_scales_from_cfg
@@ -127,6 +128,27 @@ def peak_memory_bytes() -> int | None:
     return best
 
 
+def _is_l1(final) -> bool:
+    """True for a resource-world-v1 rollout (its state carries active gates)."""
+    return bool(np.asarray(final.resource.diversion_active).any())
+
+
+def _live_mask(traj, final) -> np.ndarray:
+    """(W, S, B) float mask of samples a metric may average over.
+
+    baseline-v0 keeps its historical definition (post-step ``alive``). In L1 an
+    aircraft that already arrived, diverted or was lost before a step produces
+    no exposure, lock, AGL or CBF sample for it: frozen post-terminal rows would
+    otherwise dilute every live-step mean. The terminal step itself stays live.
+    """
+    alive = np.asarray(traj["alive"])
+    if not _is_l1(final):
+        return alive.astype(np.float32)
+    done = np.asarray(traj["reached"]) | np.asarray(traj["diverted"]) | ~alive
+    before = np.concatenate([np.zeros_like(done[:, :1]), done[:, :-1]], axis=1)
+    return (~before).astype(np.float32)
+
+
 def _exposure_metrics(traj, final, n_worlds: int, n_blue: int) -> dict:
     """Exposure statistics that are not biased by how early a policy dies.
 
@@ -145,7 +167,7 @@ def _exposure_metrics(traj, final, n_worlds: int, n_blue: int) -> dict:
     """
     # vmap puts the world axis first, then scan's time axis: (W, S, B).
     pd = np.asarray(traj["terms"].exposure)
-    live = np.asarray(traj["alive"]).astype(np.float32)
+    live = _live_mask(traj, final)
     reached = np.asarray(final.reached).astype(np.float32)  # (W, B)
 
     win = min(100, pd.shape[1])
@@ -159,6 +181,46 @@ def _exposure_metrics(traj, final, n_worlds: int, n_blue: int) -> dict:
     }
 
 
+def _outcome_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
+    """Terminal-outcome statistics shared by ``rollout_metrics`` and ``baseline``.
+
+    baseline-v0: the historical expressions, unchanged. L1: every rate is the
+    share of aircraft whose single exclusive first outcome (see
+    ``env.resource.OUTCOME_PRECEDENCE``) is that outcome, so rates sum to at
+    most one. ``survival_rate`` is *ordinary* survival: primary completion
+    only. A live timeout or a safe diversion is reported under its own key and
+    is never folded into it. Raw per-event flags are kept as ``raw_*_rate``.
+    """
+    terms = traj["terms"]
+    n = n_worlds * n_blue
+    if not _is_l1(final):
+        return {
+            "survival_rate": float(final.alive.mean()),
+            "objective_rate": float(final.reached.mean()),
+            "shootdown_rate": float(np.asarray(terms.shotdown).sum() / n),
+        }
+    out = np.asarray(final.resource.outcome)
+
+    def share(code):
+        return float((out == code).sum() / n)
+
+    return {
+        "survival_rate": share(resource_mod.OUTCOME_PRIMARY),
+        "objective_rate": share(resource_mod.OUTCOME_PRIMARY),
+        "diversion_rate": share(resource_mod.OUTCOME_DIVERTED),
+        "recovery_rate": share(resource_mod.OUTCOME_PRIMARY) + share(resource_mod.OUTCOME_DIVERTED),
+        "timeout_rate": share(resource_mod.OUTCOME_TIMEOUT),
+        "fuel_loss_rate": share(resource_mod.OUTCOME_FUEL),
+        "shootdown_rate": share(resource_mod.OUTCOME_SHOTDOWN),
+        "terrain_rate": share(resource_mod.OUTCOME_TERRAIN),
+        "bounds_rate": share(resource_mod.OUTCOME_BOUNDS),
+        "raw_shootdown_rate": float(np.asarray(terms.shotdown).sum() / n),
+        "raw_terrain_rate": float(np.asarray(terms.terrain_violation).sum() / n),
+        "raw_bounds_rate": float(np.asarray(terms.bounds_violation).sum() / n),
+        "raw_fuel_loss_rate": float(np.asarray(terms.out_of_fuel).sum() / n),
+    }
+
+
 def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
     """Every evaluation statistic, from one batch of full-length episodes.
 
@@ -168,30 +230,24 @@ def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
     a regression gate comparing numbers produced by two different formulas
     would be comparing the formulas.
     """
-    # The expressions below are the ones `evaluate` has always used, verbatim
+    # baseline-v0 expressions are the ones `evaluate` has always used, verbatim
     # (JAX float32 reductions), so a history produced before this split and one
     # produced after it are bit-identical.
-    live = traj["alive"].astype(np.float32)
-    diverted = np.asarray(final.resource.diverted)
-    fuel_loss = np.asarray(traj["terms"].out_of_fuel)
-    terminal = np.asarray(final.reached) | diverted | ~np.asarray(final.alive)
-    final_fuel = np.asarray(final.air.fuel)
-    reserve = np.asarray(final.resource.reserve_fuel)
-    resource_enabled = bool(np.asarray(final.resource.diversion_active).any())
-    recovered = np.asarray(final.reached) | diverted
-    # L0's historical definition remains bit-for-bit. In L1 a live timeout is
-    # not counted as equivalent to reaching either a primary or safe recovery.
-    survived = (np.asarray(final.alive) & recovered) if resource_enabled else np.asarray(final.alive)
-    return {
-        "survival_rate": float(survived.mean()),
-        "recovery_rate": float(recovered.mean()),
-        "objective_rate": float(final.reached.mean()),
-        "diversion_rate": float(diverted.mean()),
-        "fuel_loss_rate": float((fuel_loss.max(axis=1) > 0).sum() / (n_worlds * n_blue)),
-        "mean_terminal_reserve": float(
+    live = _live_mask(traj, final)
+    l1 = _is_l1(final)
+    outcome = _outcome_metrics(final, traj, n_worlds, n_blue)
+    resource = {}
+    if l1:
+        diverted = np.asarray(final.resource.diverted)
+        terminal = np.asarray(final.reached) | diverted | ~np.asarray(final.alive)
+        final_fuel = np.asarray(final.air.fuel)
+        reserve = np.asarray(final.resource.reserve_fuel)
+        resource["mean_terminal_reserve"] = float(
             np.where(terminal, final_fuel - reserve, 0.0).sum() / max(terminal.sum(), 1)
-        ),
-        "shootdown_rate": float(np.asarray(traj["terms"].shotdown).sum() / (n_worlds * n_blue)),
+        )
+    return {
+        **outcome,
+        **resource,
         **_exposure_metrics(traj, final, n_worlds, n_blue),
         "mean_lock": float((np.asarray(traj["terms"].lock_level) * live).sum() / max(live.sum(), 1)),
         "mean_min_agl": float(np.asarray(traj["alt_agl"]).min(axis=0).mean()),
@@ -199,9 +255,11 @@ def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
         # death-cause breakdown. Without this a falling shootdown rate reads as
         # progress even when the policy has merely swapped being shot down for
         # flying into a hill.
-        "terrain_rate": float(np.asarray(traj["terms"].terrain_violation).sum() / (n_worlds * n_blue)),
-        "bounds_rate": float(np.asarray(traj["terms"].bounds_violation).sum() / (n_worlds * n_blue)),
-        "timeout_rate": float((final.alive & ~final.reached & ~final.resource.diverted).mean()),
+        **({} if l1 else {
+            "terrain_rate": float(np.asarray(traj["terms"].terrain_violation).sum() / (n_worlds * n_blue)),
+            "bounds_rate": float(np.asarray(traj["terms"].bounds_violation).sum() / (n_worlds * n_blue)),
+            "timeout_rate": float((final.alive & ~final.reached & ~final.resource.diverted).mean()),
+        }),
         # A filter that is infeasible most of the time is not a backstop. Report
         # it either way; see next-steps.md S-2.
         "cbf_infeasible_rate": float(
@@ -365,16 +423,24 @@ def make_reserve_divert_policy(cfg: EnvConfig):
 BASELINE_POLICIES = {"direct": direct_route_policy, "avoid_nap": avoid_nap_policy}
 
 
+def baseline_policies(cfg: EnvConfig) -> dict:
+    """Reference controllers for ``cfg``: legacy pair, plus reserve-divert in L1."""
+    pols = dict(BASELINE_POLICIES)
+    if cfg.resource.enabled:
+        pols["reserve_divert"] = make_reserve_divert_policy(cfg)
+    return pols
+
+
 def baseline(env: NaigosEnv, n_worlds: int, key) -> dict:
-    """Both reference controllers: the naive direct route and a competent
-    hand-written avoid-plus-nap-of-the-earth heuristic."""
+    """Reference controllers: the naive direct route and a competent
+    hand-written avoid-plus-nap-of-the-earth heuristic (plus reserve-divert in
+    L1). Outcomes come from ``_outcome_metrics``, so a live timeout or a safe
+    diversion is never counted as ordinary survival."""
     out = {}
-    for name, pol in BASELINE_POLICIES.items():
+    for name, pol in baseline_policies(env.cfg).items():
         final, traj = jax.jit(jax.vmap(lambda k2: env.rollout(k2, pol)))(jax.random.split(key, n_worlds))
         m = {
-            "survival_rate": float(final.alive.mean()),
-            "objective_rate": float(final.reached.mean()),
-            "shootdown_rate": float(np.asarray(traj["terms"].shotdown).sum() / (n_worlds * env.cfg.n_blue)),
+            **_outcome_metrics(final, traj, n_worlds, env.cfg.n_blue),
             **_exposure_metrics(traj, final, n_worlds, env.cfg.n_blue),
         }
         out.update({f"{name}_{k}": v for k, v in m.items()})
@@ -534,6 +600,89 @@ def route_history_scalars(result: dict) -> dict:
     }
 
 
+RESOURCE_EVAL_PROTOCOL = "naigos-resource-eval-v1"
+
+
+def evaluate_resource_bank(
+    env: NaigosEnv,
+    policy,
+    *,
+    training_seeds=(),
+    splits: tuple[str, ...] = ("heldout", "train_reference"),
+    weights: RewardWeights | None = None,
+) -> dict:
+    """Play the frozen resource bank (L1) and report each split by combination.
+
+    Every row fixes its master seed, route and all resource parameters, so the
+    result is a deterministic function of the policy and the base environment.
+    Refuses training seeds inside the reserved ranges, records the bank and
+    base-environment digests, checks each scenario's provenance, and runs the
+    independent NumPy resource verifier (fuel, outcomes, observation, reward,
+    CMDP cost, latent constancy and sampled ranges) over every episode.
+
+    ponytail: one jit per scenario (the realized resource config is static);
+    10 compiles per bank. Batch by config only if bank evaluation gets hot.
+    """
+    from ..env.resource_bank import (
+        assert_resource_bank_disjoint,
+        base_config_digest,
+        config_for_scenario,
+        provenance_problems,
+        resource_bank,
+        resource_protocol,
+    )
+    from . import reward as reward_mod
+    from . import verifier
+
+    if not env.cfg.resource.enabled:
+        raise ValueError("evaluate_resource_bank requires resource-world-v1/endurance")
+    assert_resource_bank_disjoint(training_seeds)
+    weights = weights or RewardWeights()
+    hmap = env.fixed_hmap
+    base_digest = base_config_digest(env.cfg, hmap)
+    result: dict = {"protocol": RESOURCE_EVAL_PROTOCOL, **resource_protocol(base_digest), "problems": []}
+
+    for split in splits:
+        finals, trajs, by_combination = [], [], {}
+        for row in resource_bank(split):
+            cfg = config_for_scenario(env.cfg, row)
+            sub = NaigosEnv(cfg, hmap=hmap, red_policy=env.red_policy)
+            result["problems"] += provenance_problems(cfg, row, base_digest, hmap)
+            key = jax.random.PRNGKey(row.seed)
+            route = jnp.array([np.deg2rad(row.bearing_deg), row.family_id], dtype=jnp.float32)
+            start = np.asarray(sub.reset_route(jax.random.split(key)[0], route)[0].air.pos)
+            final, traj = jax.device_get(jax.jit(lambda k, r: sub.rollout(k, policy, route=r))(key, route))
+            terms = traj["terms"]
+            report = verifier.verify_resource_trace(
+                cfg, traj, start=start, weights=dataclasses.asdict(weights),
+                reward=np.asarray(reward_mod.compute(terms, weights)),
+                cost=np.asarray(reward_mod.constraint_cost(terms)),
+            )
+            one = lambda a: np.asarray(a)[None]  # noqa: E731
+            f1, t1 = jax.tree.map(one, final), jax.tree.map(one, traj)
+            finals.append(f1)
+            trajs.append(t1)
+            by_combination[row.combination] = {
+                "scenario_id": row.scenario_id,
+                "seed": row.seed,
+                **rollout_metrics(f1, t1, 1, cfg.n_blue),
+                "verification": {"ok": report.ok, "mismatches": report.mismatches[:20],
+                                 "total_cost": report.total_cost},
+            }
+        cat = lambda *a: np.concatenate(a, axis=0)  # noqa: E731
+        result[split] = {
+            "n_scenarios": len(by_combination),
+            "aggregate": rollout_metrics(
+                jax.tree.map(cat, *finals), jax.tree.map(cat, *trajs), len(finals), env.cfg.n_blue
+            ),
+            "by_combination": by_combination,
+        }
+    result["verified"] = not result["problems"] and all(
+        c["verification"]["ok"] for s in splits for c in result[s]["by_combination"].values()
+    )
+    return result
+
+
 def run(
     env_cfg: EnvConfig | None = None,
     ppo_cfg: PPOConfig | None = None,
@@ -620,13 +769,14 @@ def run(
             "recurrent_seq_len": int(ppo_cfg.recurrent_seq_len),
         }
         if env_cfg.resource.enabled:
-            from ..env.resource_bank import resource_protocol
+            from ..env.resource_bank import assert_resource_bank_disjoint, base_config_digest, resource_protocol
 
+            assert_resource_bank_disjoint([train_cfg.seed])
             meta_config.update(
                 environment_model_id=env_cfg.resource.model,
                 observation_schema_id=ckpt.RESOURCE_OBSERVATION_SCHEMA,
                 resource_config=dataclasses.asdict(env_cfg.resource),
-                resource_bank=resource_protocol(),
+                resource_bank=resource_protocol(base_config_digest(env_cfg, hmap)),
             )
         meta = {
             **meta,

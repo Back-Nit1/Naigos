@@ -144,4 +144,3 @@ def test_same_shape_but_different_resource_ranges_are_refused():
     }
     with pytest.raises(ck.CheckpointError, match="resource_config differs"):
         ck.require_environment_compatible(blob, CFG, "different-ranges")
-

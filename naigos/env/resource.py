@@ -28,6 +28,20 @@ OUTCOME_FUEL = 6
 OUTCOME_TIMEOUT = 7
 
 
+# Episode-level stream IDs from docs/plans/resource-world.md. L1 consumes only
+# "fuel" (its three latents are sub-folded 1..3 under that one stream); the
+# rest are reserved so enabling a later resource never moves an earlier draw.
+RNG_STREAM_IDS = {
+    "fuel": 101,
+    "sensor": 102,
+    "comms": 103,
+    "actuator": 104,
+    "compute": 105,
+    "weather": 106,
+    "map": 107,
+}
+
+
 class ResourceState(NamedTuple):
     initial_fuel: jax.Array  # (B,) kg
     reserve_fuel: jax.Array  # (B,) kg
@@ -92,9 +106,10 @@ def initial_state(cfg: EnvConfig, episode_key, hmap, start, objective, bounds) -
         direct = jnp.linalg.norm(objective[:, :2] - start[:, :2], axis=-1)
         rate = nominal_burn_rate(cfg, jnp.full((B,), cfg.airframe.v_init))
         direct_fuel = direct / cfg.airframe.v_init * rate
-        ratio = _uniform(jax.random.fold_in(episode_key, 101), (B,), cfg.resource.fuel_budget_ratio)
-        reserve_ratio = _uniform(jax.random.fold_in(episode_key, 102), (B,), cfg.resource.reserve_ratio)
-        burn_multiplier = _uniform(jax.random.fold_in(episode_key, 103), (B,), cfg.resource.burn_multiplier)
+        fuel_key = jax.random.fold_in(episode_key, RNG_STREAM_IDS["fuel"])
+        ratio = _uniform(jax.random.fold_in(fuel_key, 1), (B,), cfg.resource.fuel_budget_ratio)
+        reserve_ratio = _uniform(jax.random.fold_in(fuel_key, 2), (B,), cfg.resource.reserve_ratio)
+        burn_multiplier = _uniform(jax.random.fold_in(fuel_key, 3), (B,), cfg.resource.burn_multiplier)
         fuel = direct_fuel * ratio
         rs = ResourceState(
             initial_fuel=fuel,
@@ -172,15 +187,36 @@ def observation_features(cfg: EnvConfig, air: AircraftState, objective, rs: Reso
     return jnp.concatenate([resource, gate.reshape(cfg.n_blue, -1)], axis=-1)
 
 
-def outcome_update(previous, primary, diverted, shot, terrain, bounds, dry, timeout):
-    """Assign exactly one first terminal outcome, using physical-loss precedence."""
-    new = jnp.zeros_like(previous)
-    new = jnp.where(primary, OUTCOME_PRIMARY, new)
-    new = jnp.where(diverted, OUTCOME_DIVERTED, new)
-    new = jnp.where(shot, OUTCOME_SHOTDOWN, new)
-    new = jnp.where(bounds, OUTCOME_BOUNDS, new)
-    new = jnp.where(terrain, OUTCOME_TERRAIN, new)
-    new = jnp.where(dry, OUTCOME_FUEL, new)
-    new = jnp.where(timeout & (new == 0), OUTCOME_TIMEOUT, new)
-    return jnp.where(previous == OUTCOME_ONGOING, new, previous).astype(jnp.uint8)
+# Simultaneous events within one step resolve by this order, highest first.
+# Any loss beats any recovery (the env also refuses to grant arrival/diversion
+# on a loss step); among losses a hostile kill is attributed first, then the
+# physical terrain impact, then leaving the play box, then the fuel-exhaustion
+# crossing (the aircraft still glides on that step). Primary beats diversion.
+# Raw per-event flags stay in ``RewardTerms`` as evidence; metrics, the
+# verifier and replay summaries count the exclusive label.
+OUTCOME_PRECEDENCE = (
+    OUTCOME_SHOTDOWN,
+    OUTCOME_TERRAIN,
+    OUTCOME_BOUNDS,
+    OUTCOME_FUEL,
+    OUTCOME_PRIMARY,
+    OUTCOME_DIVERTED,
+    OUTCOME_TIMEOUT,
+)
 
+
+def outcome_update(previous, primary, diverted, shot, terrain, bounds, dry, timeout):
+    """Assign exactly one first terminal outcome following ``OUTCOME_PRECEDENCE``."""
+    events = {
+        OUTCOME_SHOTDOWN: shot,
+        OUTCOME_TERRAIN: terrain,
+        OUTCOME_BOUNDS: bounds,
+        OUTCOME_FUEL: dry,
+        OUTCOME_PRIMARY: primary,
+        OUTCOME_DIVERTED: diverted,
+        OUTCOME_TIMEOUT: timeout,
+    }
+    new = jnp.zeros_like(previous)
+    for code in reversed(OUTCOME_PRECEDENCE):  # lowest priority first, so higher overwrites
+        new = jnp.where(events[code], code, new)
+    return jnp.where(previous == OUTCOME_ONGOING, new, previous).astype(jnp.uint8)

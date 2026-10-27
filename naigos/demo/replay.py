@@ -21,8 +21,10 @@ import jax
 import jax.numpy as jnp
 import numpy as np
 
+from ..env import resource as resource_mod
 from ..env.flight_env import NaigosEnv
 from ..rl.ppo import greedy_policy
+from ..rl.train import make_reserve_divert_policy, rollout_metrics
 from . import events as demo_events
 
 
@@ -51,6 +53,29 @@ def avoid_nap_policy(obs, key):
 
 
 def _summary(final, traj, cfg):
+    if cfg.resource.enabled:
+        # Exclusive outcomes: primary completion, safe diversion, timeout and
+        # fuel loss are separate, and ordinary survival (primary completion
+        # only) never absorbs a diversion or a live timeout.
+        n_worlds, n_blue = np.asarray(final.alive).shape
+        m = rollout_metrics(final, traj, n_worlds, n_blue)
+        outcome = np.asarray(final.resource.outcome)
+        count = lambda code: int((outcome == code).sum())  # noqa: E731
+        return {
+            "survival_rate": m["survival_rate"],
+            "objective_rate": m["objective_rate"],
+            "primary_completion_rate": m["objective_rate"],
+            "safe_diversion_rate": m["diversion_rate"],
+            "timeout_rate": m["timeout_rate"],
+            "resource_loss_rate": m["fuel_loss_rate"],
+            "shootdowns": count(resource_mod.OUTCOME_SHOTDOWN),
+            "terrain_losses": count(resource_mod.OUTCOME_TERRAIN),
+            "bounds_losses": count(resource_mod.OUTCOME_BOUNDS),
+            "mean_detection_prob": m["mean_exposure"],
+            "mean_track_quality": m["mean_lock"],
+            "mean_min_agl_m": m["mean_min_agl"],
+            "cbf_infeasible_rate": m["cbf_infeasible_rate"],
+        }
     live = np.asarray(traj["alive"]).astype(np.float32)
     denom = max(live.sum(), 1.0)
     return {
@@ -104,7 +129,7 @@ def run(
         afilter = make_policy_filter(CBFConfig(), cfg)
 
     out = {}
-    for name, pol in (
+    policies = [
         ("untrained", greedy_policy(
             untrained, cfg, family=policy_family, version=policy_version
         )),
@@ -113,14 +138,17 @@ def run(
         )),
         ("direct_route_baseline", direct_route_policy),
         ("avoid_nap_baseline", avoid_nap_policy),
-    ):
+    ]
+    if cfg.resource.enabled:
+        policies.append(("reserve_divert_baseline", make_reserve_divert_policy(cfg)))
+    for name, pol in policies:
         final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter)))(keys)
         out[name] = {"summary": _summary(final, traj, cfg), "traj": traj, "final": final}
     return out
 
 
 ROWS = [
-    ("sorties surviving", "survival_rate", "{:.3f}", "up"),
+    ("sorties surviving", "survival_rate", "{:.3f}", "up"),  # L1: ordinary survival
     ("objectives reached", "objective_rate", "{:.3f}", "up"),
     ("shootdowns", "shootdowns", "{:.0f}", "down"),
     ("terrain losses", "terrain_losses", "{:.0f}", "down"),
@@ -130,12 +158,21 @@ ROWS = [
     ("mean min AGL (m)", "mean_min_agl_m", "{:.0f}", None),
 ]
 
-ORDER = ["untrained", "trained", "direct_route_baseline", "avoid_nap_baseline"]
+# Shown only when a result carries them (resource-world L1); one outcome per row.
+ROWS_L1 = [
+    ("primary completion", "primary_completion_rate", "{:.3f}", "up"),
+    ("safe diversion", "safe_diversion_rate", "{:.3f}", None),
+    ("timeout (live)", "timeout_rate", "{:.3f}", "down"),
+    ("resource loss (fuel)", "resource_loss_rate", "{:.3f}", "down"),
+]
+
+ORDER = ["untrained", "trained", "direct_route_baseline", "avoid_nap_baseline", "reserve_divert_baseline"]
 LABEL = {
     "untrained": "untrained",
     "trained": "TRAINED",
     "direct_route_baseline": "direct route",
     "avoid_nap_baseline": "avoid+nap",
+    "reserve_divert_baseline": "reserve-divert",
 }
 
 
@@ -148,7 +185,8 @@ def _table(results, use_cbf: bool = False) -> str:
         "  " + "metric".ljust(w) + "".join(LABEL[n].rjust(15) for n in names),
         "  " + "-" * (w + 15 * len(names)),
     ]
-    for label, key, fmt, better in ROWS:
+    l1 = any("safe_diversion_rate" in results[n]["summary"] for n in names)
+    for label, key, fmt, better in ROWS + (ROWS_L1 if l1 else []):
         cells = []
         for n in names:
             v = results[n]["summary"].get(key)

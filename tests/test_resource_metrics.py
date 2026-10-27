@@ -47,4 +47,3 @@ def test_live_timeout_is_not_l1_survival_or_recovery():
     assert metrics["recovery_rate"] == 0.0
     assert metrics["objective_rate"] == 0.0
     assert metrics["diversion_rate"] == 0.0
-

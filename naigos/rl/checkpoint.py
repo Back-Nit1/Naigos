@@ -283,7 +283,7 @@ def save(
         "actor_schema_id": RESOURCE_ACTOR_SCHEMA if env_cfg.resource.enabled else BASELINE_ACTOR_SCHEMA,
         "resource_config": dataclasses.asdict(env_cfg.resource),
         "resource_bank": (
-            _resource_bank_record() if env_cfg.resource.enabled else None
+            _resource_bank_record(env_cfg) if env_cfg.resource.enabled else None
         ),
         # --- everything needed to continue ---
         "recovery": {
@@ -563,11 +563,15 @@ def obs_config_from_blob(blob: dict) -> dict:
     return out
 
 
-def _resource_bank_record() -> dict:
-    from ..env.resource_bank import resource_protocol
+def _resource_bank_record(env_cfg) -> dict:
+    from ..env.resource_bank import base_config_digest, resource_protocol
 
     protocol = resource_protocol()
-    return {"version": protocol["bank"], "sha256": protocol["bank_sha256"]}
+    return {
+        "version": protocol["bank"],
+        "sha256": protocol["bank_sha256"],
+        "base_config_sha256": base_config_digest(env_cfg),
+    }
 
 
 def environment_model_from_blob(blob: dict) -> str:
@@ -615,7 +619,7 @@ def require_environment_compatible(blob: dict, cfg, source) -> None:
         raise CheckpointError(f"{source}: checkpoint resource_config differs from the requested L1 environment")
     if cfg.resource.enabled:
         saved_bank = (blob.get("resource_bank") or {}).get("sha256")
-        want_bank = _resource_bank_record()["sha256"]
+        want_bank = _resource_bank_record(cfg)["sha256"]
         if saved_bank != want_bank:
             raise CheckpointError(
                 f"{source}: checkpoint resource bank digest {saved_bank!r} differs from this "
