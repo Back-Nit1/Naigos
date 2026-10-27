@@ -21,3 +21,6 @@ node_modules/
 # Committing them produces the "embedded git repository" warning and a gitlink
 # that no clone can resolve.
 .claude/worktrees/
+public/
+.vercel
+.env*

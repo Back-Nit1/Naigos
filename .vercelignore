@@ -1,0 +1,9 @@
+.venv
+node_modules
+data_cache
+runs
+runs_*.log
+checkpoints
+.pytest_cache
+.claude
+.git
