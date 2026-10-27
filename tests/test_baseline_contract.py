@@ -41,6 +41,7 @@ def test_runtime_pytrees_only_gained_trailing_neutral_fields():
     assert set(RewardTerms._fields) - {"diverted"} == set(RewardTerms._fields[:5]) | {
         "shotdown", "fuel_used", "g_excess", "terrain_violation", "ceiling_violation",
         "stall_violation", "bounds_violation", "out_of_fuel", "edge_proximity",
+        "building_collision",
     }
 
 

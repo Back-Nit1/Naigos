@@ -16,7 +16,7 @@ from naigos.rl.train import baseline, rollout_metrics
 
 
 def _outcome(**flags):
-    names = ("primary", "diverted", "shot", "terrain", "bounds", "dry", "timeout")
+    names = ("primary", "diverted", "shot", "terrain", "building", "bounds", "dry", "timeout")
     args = [jnp.array([bool(flags.get(n, False))]) for n in names]
     return int(R.outcome_update(jnp.zeros((1,), jnp.uint8), *args)[0])
 
@@ -40,7 +40,7 @@ def test_simultaneous_events_resolve_by_documented_precedence(flags, expected):
 
 def test_first_outcome_is_never_overwritten():
     prev = jnp.array([R.OUTCOME_DIVERTED], dtype=jnp.uint8)
-    out = R.outcome_update(prev, *[jnp.array([True])] * 7)
+    out = R.outcome_update(prev, *[jnp.array([True])] * 8)
     assert int(out[0]) == R.OUTCOME_DIVERTED
 
 

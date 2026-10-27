@@ -26,6 +26,7 @@ OUTCOME_TERRAIN = 4
 OUTCOME_BOUNDS = 5
 OUTCOME_FUEL = 6
 OUTCOME_TIMEOUT = 7
+OUTCOME_BUILDING = 8
 
 
 # Episode-level stream IDs from docs/plans/resource-world.md. L1 consumes only
@@ -197,6 +198,7 @@ def observation_features(cfg: EnvConfig, air: AircraftState, objective, rs: Reso
 # verifier and replay summaries count the exclusive label.
 OUTCOME_PRECEDENCE = (
     OUTCOME_SHOTDOWN,
+    OUTCOME_BUILDING,
     OUTCOME_TERRAIN,
     OUTCOME_BOUNDS,
     OUTCOME_FUEL,
@@ -206,11 +208,12 @@ OUTCOME_PRECEDENCE = (
 )
 
 
-def outcome_update(previous, primary, diverted, shot, terrain, bounds, dry, timeout):
+def outcome_update(previous, primary, diverted, shot, terrain, building, bounds, dry, timeout):
     """Assign exactly one first terminal outcome following ``OUTCOME_PRECEDENCE``."""
     events = {
         OUTCOME_SHOTDOWN: shot,
         OUTCOME_TERRAIN: terrain,
+        OUTCOME_BUILDING: building,
         OUTCOME_BOUNDS: bounds,
         OUTCOME_FUEL: dry,
         OUTCOME_PRIMARY: primary,

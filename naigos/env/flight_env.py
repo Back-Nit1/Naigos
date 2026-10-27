@@ -31,6 +31,7 @@ from . import obs as obs_mod
 from . import resource as resource_mod
 from . import terrain as terrain_mod
 from . import threats as threats_mod
+from . import urban as urban_mod
 from . import weather as weather_mod
 from .airframe import AircraftState
 from .config import (
@@ -41,6 +42,7 @@ from .config import (
     mission_problems,
     route_protocol_problems,
     weather_problems,
+    urban_problems,
 )
 from .threats import RedScales, ThreatState, red_scales_from_cfg
 
@@ -100,20 +102,45 @@ class RewardTerms(NamedTuple):
     bounds_violation: jax.Array  # (B,)
     out_of_fuel: jax.Array  # (B,)
     edge_proximity: jax.Array  # (B,) 0 inside, ramps to 1 at the map boundary
+    building_collision: jax.Array  # (B,) evidence-grade structure impact
 
 
 class NaigosEnv:
-    def __init__(self, cfg: EnvConfig, hmap: jax.Array | None = None, red_policy=None):
+    def __init__(
+        self,
+        cfg: EnvConfig,
+        hmap: jax.Array | None = None,
+        red_policy=None,
+        urban_obstacles=None,
+        env_origin_utm_m=None,
+    ):
         """`hmap` pins a fixed DEM (the real-data path). If None, each reset
         generates synthetic terrain -- useful for tests and for domain
         randomisation, but the headline result should be run on a real DEM.
         """
         problems = (route_protocol_problems(cfg) + resource_world_problems(cfg.resource)
-                    + weather_problems(cfg.weather) + mission_problems(cfg.mission, cfg.resource))
+                    + weather_problems(cfg.weather) + mission_problems(cfg.mission, cfg.resource)
+                    + urban_problems(cfg.urban))
         if problems:
             raise ValueError("invalid route configuration:\n" + "\n".join(f"  - {p}" for p in problems))
         self.cfg = cfg
         self.fixed_hmap = hmap
+        if cfg.urban.enabled:
+            if urban_obstacles is None:
+                raise ValueError("urban obstacle physics requires an explicitly validated artifact")
+            self.urban_surface = urban_mod.from_artifact(urban_obstacles, env_origin_utm_m)
+            max_wind = max(sum(x * x for x in w) ** 0.5 for w in cfg.weather.wind_enu_mps)
+            max_turb = max(cfg.weather.turbulence_intensity_mps) * cfg.weather.gust_clip_sigma
+            spacing = cfg.dt * (cfg.airframe.v_max + max_wind + max_turb) / cfg.urban.collision_samples
+            if spacing > self.urban_surface.cell_m:
+                raise ValueError(
+                    f"urban collision sample spacing {spacing:.2f} m exceeds artifact cell "
+                    f"{self.urban_surface.cell_m:.2f} m; increase collision_samples"
+                )
+        else:
+            # Passing a presentation/viewer payload while disabled cannot alter
+            # simulation state: it is intentionally ignored.
+            self.urban_surface = None
         if red_policy is None:
             from ..rl.red_team import scripted_red
 
@@ -351,6 +378,7 @@ class NaigosEnv:
             state.threats.pos,
             tparams,
             state.threats.active,
+            visibility_fn=self._urban_visibility(state.hmap) if cfg.urban.enabled else None,
         )
         if cfg.weather.enabled:
             det["pd"] = det["pd"] * state.weather.sensing_attenuation[None, :]
@@ -358,6 +386,11 @@ class NaigosEnv:
         live = (state.alive & ~state.reached & ~state.resource.diverted).astype(jnp.float32)
         det["pd"] = det["pd"] * live[None, :]
         return tparams, det
+
+    def _urban_visibility(self, hmap):
+        return lambda p_from, p_to: urban_mod.visibility(
+            self.urban_surface, hmap, self.cfg.terrain, self.cfg.detection, p_from, p_to
+        )
 
     def observe(self, state: EnvState) -> obs_mod.Observation:
         cfg = self.cfg
@@ -474,7 +507,8 @@ class NaigosEnv:
         # --- detection against the new geometry -------------------------------
         tparams = threats_mod.per_threat_params(cfg, tstate.kind, state.red_scales)
         det = det_mod.detection_probability(
-            state.hmap, cfg.terrain, cfg.detection, air.pos, air.psi, tstate.pos, tparams, tstate.active
+            state.hmap, cfg.terrain, cfg.detection, air.pos, air.psi, tstate.pos, tparams, tstate.active,
+            visibility_fn=self._urban_visibility(state.hmap) if cfg.urban.enabled else None,
         )
         if cfg.weather.enabled:
             det["pd"] = det["pd"] * weather.sensing_attenuation[None, :]
@@ -497,6 +531,18 @@ class NaigosEnv:
         ground = terrain_mod.sample_height(state.hmap, cfg.terrain, air.pos[:, 0], air.pos[:, 1])
         alt_agl = air.pos[:, 2] - ground
         terrain_hit = (alt_agl < cfg.airframe.floor_agl) & ~frozen
+        building_hit = jnp.zeros((cfg.n_blue,), dtype=bool)
+        obstacle_clearance = alt_agl
+        if cfg.urban.enabled:
+            terrain_hit, building_hit, _, _ = urban_mod.swept_collisions(
+                self.urban_surface, state.hmap, cfg.terrain, cfg.urban,
+                state.air.pos, air.pos, cfg.airframe.floor_agl,
+            )
+            terrain_hit = terrain_hit & ~frozen
+            building_hit = building_hit & ~frozen
+            obstacle_clearance = urban_mod.clearance(
+                self.urban_surface, state.hmap, cfg.terrain, air.pos
+            )[0]
         ceiling_hit = (air.pos[:, 2] >= cfg.airframe.ceiling - 1e-3) & ~frozen
         stall = (air.speed <= cfg.airframe.v_stall + 1e-3) & ~frozen
         # out of bounds means out of THIS world's play area, not off the DEM grid
@@ -535,7 +581,7 @@ class NaigosEnv:
             # A simultaneous physical loss is not a successful recovery. Keep
             # the legacy ordering untouched, but make L1's exclusive outcome
             # labels agree with the reached/diverted state flags.
-            arrive = arrive & ~shot & ~terrain_hit & ~oob & ~dry
+            arrive = arrive & ~shot & ~terrain_hit & ~building_hit & ~oob & ~dry
 
         if cfg.resource.enabled:
             gate_dist = jnp.linalg.norm(
@@ -545,10 +591,10 @@ class NaigosEnv:
                 (gate_dist <= cfg.resource.gate_arrival_radius) & state.resource.diversion_active,
                 axis=-1,
             )
-            diverted_now = (at_gate & ~arrive & ~shot & ~terrain_hit & ~oob & ~dry
+            diverted_now = (at_gate & ~arrive & ~shot & ~terrain_hit & ~building_hit & ~oob & ~dry
                              & state.alive & ~state.reached & ~state.resource.diverted)
             if cfg.mission.enabled and cfg.mission.family == "recovery":
-                diverted_now = (at_gate & ~shot & ~terrain_hit & ~oob & ~dry
+                diverted_now = (at_gate & ~shot & ~terrain_hit & ~building_hit & ~oob & ~dry
                                  & state.alive & ~state.resource.diverted)
         else:
             diverted_now = jnp.zeros((cfg.n_blue,), dtype=bool)
@@ -556,14 +602,14 @@ class NaigosEnv:
         mission_timeout = jnp.zeros((cfg.n_blue,), dtype=bool)
         mission = state.mission
         if cfg.mission.enabled:
-            loss = shot | terrain_hit | oob | (dry if cfg.resource.enabled else False)
+            loss = shot | terrain_hit | building_hit | oob | (dry if cfg.resource.enabled else False)
             mission, primary_now, recovered_now, mission_timeout = mission_mod.advance(
                 cfg.mission, state.mission, air.pos, dt, state.t + 1, loss, diverted_now,
             )
             arrive = primary_now
             diverted_now = diverted_now | recovered_now
 
-        alive = state.alive & ~shot & ~terrain_hit & ~oob
+        alive = state.alive & ~shot & ~terrain_hit & ~building_hit & ~oob
         if cfg.resource.enabled:
             alive = alive & ~dry
         reached = state.reached | arrive
@@ -584,6 +630,7 @@ class NaigosEnv:
             bounds_violation=oob.astype(jnp.float32),
             out_of_fuel=dry.astype(jnp.float32),
             edge_proximity=jnp.where(frozen, 0.0, edge),
+            building_collision=building_hit.astype(jnp.float32),
         )
 
         t = state.t + 1
@@ -591,7 +638,7 @@ class NaigosEnv:
         timeout = ((jnp.full((cfg.n_blue,), t >= cfg.max_steps) | mission_timeout)
                    & alive & ~reached & ~diverted)
         outcome = resource_mod.outcome_update(
-            state.resource.outcome, arrive, diverted_now, shot, terrain_hit, oob,
+            state.resource.outcome, arrive, diverted_now, shot, terrain_hit, building_hit, oob,
             dry if cfg.resource.enabled else jnp.zeros_like(dry), timeout,
         )
         rstate = state.resource._replace(diverted=diverted, outcome=outcome)
@@ -636,6 +683,8 @@ class NaigosEnv:
             "mean_wind_enu": weather.mean_wind_enu,
             "gust_enu": weather.gust_enu,
             "density_ratio": weather.density_ratio,
+            "obstacle_clearance": obstacle_clearance,
+            "building_collision": building_hit,
             "air_velocity": af_mod.velocity(air),
             "ground_velocity": af_mod.ground_velocity(
                 air, weather.mean_wind_enu, weather.gust_enu
@@ -798,6 +847,8 @@ class NaigosEnv:
             "mission_dwell_before": state.mission.dwell_s,
             "mission_dwell_after": state2.mission.dwell_s,
             "mission_outcome": state2.mission.outcome,
+            "obstacle_clearance": info["obstacle_clearance"],
+            "building_collision": info["building_collision"],
         }
         if memory is not None:
             ev["memory_before"], ev["memory_after"] = memory, memory_after
@@ -857,6 +908,8 @@ class NaigosEnv:
             "mission_completed": state2.mission.completed,
             "mission_failed": state2.mission.failed,
             "mission_outcome": state2.mission.outcome,
+            "obstacle_clearance": info["obstacle_clearance"],
+            "building_collision": info["building_collision"],
         }
 
     def rollout(self, key, policy, n_steps: int | None = None, action_filter=None, route=None, record: bool = False):

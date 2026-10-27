@@ -81,6 +81,7 @@ def detection_probability(
     threat_pos: jax.Array,  # (T, 3)
     kind_params: dict[str, jax.Array],  # each (T,)
     threat_active: jax.Array,  # (T,) bool
+    visibility_fn=None,
 ):
     """Per-step detection probability for every (threat, blue) pair.
 
@@ -106,7 +107,10 @@ def detection_probability(
 
     # radar horizon / terrain masking: the emitter sits ~10 m above its ground
     emitter = threat_pos + jnp.array([0.0, 0.0, 10.0])
-    vis = terrain_mod.visibility(hmap, tcfg, dcfg, emitter[:, None, :], jnp.broadcast_to(bp, d.shape))
+    if visibility_fn is None:
+        vis = terrain_mod.visibility(hmap, tcfg, dcfg, emitter[:, None, :], jnp.broadcast_to(bp, d.shape))
+    else:
+        vis = visibility_fn(emitter[:, None, :], jnp.broadcast_to(bp, d.shape))
 
     ground = terrain_mod.sample_height(hmap, tcfg, blue_pos[:, 0], blue_pos[:, 1])
     alt_agl = blue_pos[:, 2] - ground

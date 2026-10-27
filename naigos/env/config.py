@@ -29,6 +29,9 @@ MISSION_LEGACY = "legacy-objective-v0"
 MISSION_V1 = "procedural-mission-v1"
 MISSION_MODELS = (MISSION_LEGACY, MISSION_V1)
 MISSION_FAMILIES = ("transit", "multi_leg", "time_on_station", "survey_corridor", "recovery")
+URBAN_DISABLED = "urban-disabled-v0"
+URBAN_OBSTACLE_V1 = "urban-obstacle-physics-v1"
+URBAN_MODELS = (URBAN_DISABLED, URBAN_OBSTACLE_V1)
 
 
 @dataclass(frozen=True)
@@ -137,6 +140,41 @@ def mission_problems(cfg: MissionConfig, resource: "ResourceWorldConfig") -> lis
         problems.append("mission family 'recovery' requires the endurance resource model")
     if cfg.reveal_future_stages:
         problems.append("mission.reveal_future_stages is not implemented; future stages stay hidden")
+    return problems
+
+
+@dataclass(frozen=True)
+class UrbanPhysicsConfig:
+    """Evidence-grade structure surface selection for the opt-in urban rung."""
+
+    model: str = URBAN_DISABLED
+    schema_version: int = 1
+    los_surface: str = "terrain_only"  # terrain_only | terrain_plus_urban
+    unknown_coverage: str = "terrain_only"
+    collision_samples: int = 128
+    capsule_radius_m: float = 3.0
+
+    @property
+    def enabled(self) -> bool:
+        return self.model == URBAN_OBSTACLE_V1
+
+
+def urban_problems(cfg: UrbanPhysicsConfig) -> list[str]:
+    problems: list[str] = []
+    if cfg.model not in URBAN_MODELS:
+        problems.append(f"urban.model {cfg.model!r} is not one of {URBAN_MODELS}")
+    if cfg.schema_version != 1:
+        problems.append("urban.schema_version must be 1")
+    if cfg.los_surface not in ("terrain_only", "terrain_plus_urban"):
+        problems.append("urban.los_surface must be terrain_only or terrain_plus_urban")
+    if cfg.enabled and cfg.los_surface != "terrain_plus_urban":
+        problems.append("the urban physics model requires terrain_plus_urban LOS")
+    if cfg.unknown_coverage != "terrain_only":
+        problems.append("urban.unknown_coverage currently supports only explicit terrain_only semantics")
+    if cfg.collision_samples < 2 or cfg.collision_samples > 512:
+        problems.append("urban.collision_samples must be in [2, 512]")
+    if cfg.capsule_radius_m < 0:
+        problems.append("urban.capsule_radius_m must be non-negative")
     return problems
 
 # --- threat kinds -------------------------------------------------------------
@@ -431,6 +469,7 @@ class EnvConfig:
     resource: ResourceWorldConfig = field(default_factory=ResourceWorldConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
     mission: MissionConfig = field(default_factory=MissionConfig)
+    urban: UrbanPhysicsConfig = field(default_factory=UrbanPhysicsConfig)
     threat_kinds: tuple[ThreatKindConfig, ...] = field(default_factory=default_threat_kinds)
 
     objective_radius: float = 3_000.0  # m, arrival tolerance (horizontal)
@@ -501,6 +540,8 @@ class EnvConfig:
 
     @property
     def environment_model_id(self) -> str:
+        if self.urban.enabled:
+            return ENV_URBAN_VEHICLE_WEATHER
         return ENV_VEHICLE_WEATHER if self.weather.enabled else self.resource.model
 
     @property
