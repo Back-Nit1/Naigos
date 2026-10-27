@@ -15,7 +15,13 @@ import math
 import re
 from typing import Any, Mapping, Sequence
 
-from ..env.config import EnvConfig, ROUTE_BANK_V1_SHA256, ROUTE_BANK_VERSION
+from ..env.config import (
+    EnvConfig,
+    ROUTE_BANK_V1_SHA256,
+    ROUTE_BANK_VERSION,
+    ThreatKindConfig,
+)
+from ..research.spec import load_component
 from . import policies, runmeta
 
 SCHEMA = "naigos-experiment-matrix/1"
@@ -99,14 +105,44 @@ def _axis(data: Any, where: str, *, required: set[str], optional: set[str]) -> l
     return out
 
 
-def _policy_record(item: Mapping[str, Any], profile: runmeta.RunProfile) -> dict:
+def _policy_config(
+    profile: runmeta.RunProfile, theatre: str, *, synthetic: bool
+) -> tuple[EnvConfig, dict]:
+    kwargs = {
+        "n_blue": profile.n_blue,
+        "n_threat": profile.n_threat,
+        "n_threat_active": profile.n_threat,
+    }
+    if synthetic:
+        return EnvConfig(**kwargs), {"kind": "synthetic-defaults"}
+    try:
+        component = load_component("model.detection", theatre)
+        classes = component["parameters"]["threat_classes"]
+    except (FileNotFoundError, KeyError, TypeError) as exc:
+        raise MatrixError(
+            f"theatre {theatre!r} has no usable model.detection component: {exc}"
+        ) from exc
+    if not isinstance(classes, Mapping) or not classes:
+        raise MatrixError(f"theatre {theatre!r} has no threat classes")
+    # Policy shape depends on the number of one-hot threat classes, not their
+    # engagement parameters.  Avoid loading the DEM merely to describe an
+    # actor, but bind the basis to the complete component so regenerated
+    # theatre data cannot silently reuse an old experiment identity.
+    kinds = tuple(ThreatKindConfig(label=str(label)) for label in classes)
+    return EnvConfig(**kwargs, threat_kinds=kinds), {
+        "kind": "theatre-model.detection",
+        "theatre": theatre,
+        "component_sha256": digest(component),
+        "threat_classes": list(classes),
+    }
+
+
+def _policy_record(
+    item: Mapping[str, Any], profile: runmeta.RunProfile, theatre: str, *, synthetic: bool
+) -> dict:
     family = _label(item["family"], "policies.family")
     version = _label(item["version"], "policies.version")
-    cfg = EnvConfig(
-        n_blue=profile.n_blue,
-        n_threat=profile.n_threat,
-        n_threat_active=profile.n_threat,
-    )
+    cfg, basis = _policy_config(profile, theatre, synthetic=synthetic)
     try:
         spec = _plain(policies.get_policy_spec(cfg, family=family, version=version))
     except policies.PolicyNotRegisteredError as exc:
@@ -116,10 +152,7 @@ def _policy_record(item: Mapping[str, Any], profile: runmeta.RunProfile) -> dict
         "version": version,
         "spec": spec,
         "spec_sha256": digest(spec),
-        # Theatre-derived threat-class widths may differ.  The current remote
-        # trainer has no cheap cache-free shape resolver, so state the basis
-        # instead of pretending this is a theatre checkpoint shape.
-        "spec_basis": "EnvConfig(profile n_blue/n_threat; default threat kinds)",
+        "spec_basis": basis,
     }
 
 
@@ -208,8 +241,13 @@ def build_plan(config: Mapping[str, Any], *, code: Mapping[str, Any] | None = No
             profile = runmeta.resolve_profile(profile_name, **dict(h["profile_overrides"]))
         except (TypeError, ValueError) as exc:
             raise MatrixError(f"hyperparameters {h['name']!r}: {exc}") from exc
-        policy_records = [_policy_record(p, profile) for p in policy_axis]
         for theatre in theatres:
+            policy_records = [
+                _policy_record(
+                    p, profile, theatre, synthetic=bool(config.get("synthetic", False))
+                )
+                for p in policy_axis
+            ]
             for seed in seeds:
                 for policy in policy_records:
                     for resource in resource_axis:

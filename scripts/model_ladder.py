@@ -57,6 +57,23 @@ def _print_plan(plan: dict) -> None:
         )
 
 
+def _check_declared_timeout_covers_deployment(plan: dict, modal_runs) -> None:
+    """Refuse a cost estimate whose timeout is below the deployed ceiling."""
+    required = max(
+        modal_runs.SMOKE_TIMEOUT_S
+        if exp["profile"]["name"] == "smoke"
+        else modal_runs.TIMEOUT_S
+        for exp in plan["experiments"]
+    )
+    declared = plan["timeout_s_per_job"]
+    if declared < required:
+        raise SystemExit(
+            f"refusing submission: declared timeout {declared}s is below the existing "
+            f"deployed function ceiling {required}s, so ${plan['upper_bound_cost_usd']:.2f} "
+            "is not an upper-bound cost"
+        )
+
+
 def _submit_plan(plan: dict, *, max_cost_usd: float) -> list[dict]:
     matrix.verify_plan(plan)
     upper = float(plan["upper_bound_cost_usd"])
@@ -86,11 +103,13 @@ def _submit_plan(plan: dict, *, max_cost_usd: float) -> list[dict]:
     # Modal nor reads credentials/Volumes/deployments.
     from scripts import modal_runs
 
+    _check_declared_timeout_covers_deployment(plan, modal_runs)
+
     # Preflight every run before spawning the first one. submit_prepared repeats
     # both checks at the actual call boundary to close the race.
     marker = modal_runs._read_volume_json(runmeta.SMOKE_MARKER)
     for exp in plan["experiments"]:
-        refusal = runmeta.smoke_gate(exp["profile"]["name"], marker, code["commit"])
+        refusal = runmeta.verified_smoke_gate(exp["profile"]["name"], marker, code["commit"])
         if refusal:
             raise SystemExit(f"refusing matrix submission: {refusal}")
         modal_runs._check_not_live(exp["run_name"])
@@ -102,7 +121,9 @@ def _submit_plan(plan: dict, *, max_cost_usd: float) -> list[dict]:
         })
         meta = matrix.experiment_metadata(exp, plan)
         spec = matrix.remote_spec(exp)
-        job_id = modal_runs.submit_prepared(profile, exp["run_name"], meta, spec)
+        job_id = modal_runs.submit_prepared(
+            profile, exp["run_name"], meta, spec, require_verified_smoke=True
+        )
         record = {"run_name": exp["run_name"], "job_id": job_id}
         submitted.append(record)
         print(f"[submitted] {record['run_name']} job={record['job_id']}")

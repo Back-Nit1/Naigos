@@ -355,6 +355,7 @@ def submit_prepared(
     *,
     gpu: str = GPU_KIND,
     skip_smoke_gate: bool = False,
+    require_verified_smoke: bool = False,
 ) -> str:
     """Submit one fully described run through the existing deployed function.
 
@@ -373,7 +374,8 @@ def submit_prepared(
 
     code = meta["code"]
     marker = _read_volume_json(runmeta.SMOKE_MARKER)
-    refusal = runmeta.smoke_gate(prof.name, marker, code.get("commit"))
+    gate = runmeta.verified_smoke_gate if require_verified_smoke else runmeta.smoke_gate
+    refusal = gate(prof.name, marker, code.get("commit"))
     if refusal and not skip_smoke_gate:
         raise SystemExit(f"refusing to submit --profile {prof.name}: {refusal}")
     if refusal:

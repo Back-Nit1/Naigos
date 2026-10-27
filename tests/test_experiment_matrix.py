@@ -6,6 +6,7 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -106,6 +107,8 @@ def test_run_metadata_makes_every_experiment_axis_immutable(tmp_path):
     x = meta["config"]["experiment"]
     assert x["identity_sha256"] == exp["identity_sha256"]
     assert x["policy"]["spec_sha256"] == exp["policy"]["spec_sha256"]
+    assert x["policy"]["spec_basis"]["theatre"] == "owens_valley"
+    assert len(x["policy"]["spec_basis"]["component_sha256"]) == 64
     assert x["scenario_suite"]["sha256"] == ROUTE_BANK_V1_SHA256
     assert x["resource"] == {"name": "baseline-v0", "config": {}}
     _, fresh = runmeta.write_metadata(tmp_path, meta)
@@ -149,7 +152,30 @@ def test_submit_requires_a_cost_ceiling_before_any_submit_call(monkeypatch, tmp_
         cli.main([str(path), "--submit"])
 
 
-def test_prepared_submit_uses_existing_smoke_and_writer_gates(monkeypatch):
+def test_submit_refuses_a_declared_timeout_below_deployed_ceiling():
+    cli = _load_script("model_ladder")
+    plan = em.build_plan(
+        _config(
+            theatres=["owens_valley"], seeds=[0], timeout_s=1799,
+            hyperparameters=[{"name": "default", "profile_overrides": {}}],
+        ),
+        code=CODE,
+    )
+    deployed = SimpleNamespace(SMOKE_TIMEOUT_S=1800, TIMEOUT_S=21600)
+    with pytest.raises(SystemExit, match="not an upper-bound cost"):
+        cli._check_declared_timeout_covers_deployment(plan, deployed)
+
+    covered = em.build_plan(
+        _config(
+            theatres=["owens_valley"], seeds=[0], timeout_s=1800,
+            hyperparameters=[{"name": "default", "profile_overrides": {}}],
+        ),
+        code=CODE,
+    )
+    cli._check_declared_timeout_covers_deployment(covered, deployed)
+
+
+def test_prepared_submit_uses_verified_smoke_and_writer_gates(monkeypatch):
     mr = _load_script("modal_runs")
     profile = runmeta.resolve_profile("short")
     meta = runmeta.build_metadata(
@@ -166,9 +192,36 @@ def test_prepared_submit_uses_existing_smoke_and_writer_gates(monkeypatch):
     monkeypatch.setattr(mr, "_spawn", lambda *a, **k: spawns.append((a, k)) or "fc-1")
     monkeypatch.setattr(mr, "_read_volume_json", lambda _path: None)
     with pytest.raises(SystemExit, match="no smoke run"):
-        mr.submit_prepared(profile, "matrix-test", meta, spec)
+        mr.submit_prepared(
+            profile, "matrix-test", meta, spec, require_verified_smoke=True
+        )
     assert checks == [] and spawns == []
 
-    monkeypatch.setattr(mr, "_read_volume_json", lambda _path: {"commit": CODE["commit"]})
-    assert mr.submit_prepared(profile, "matrix-test", meta, spec) == "fc-1"
+    monkeypatch.setattr(
+        mr, "_read_volume_json", lambda _path: {"commit": CODE["commit"], "dirty": None}
+    )
+    with pytest.raises(SystemExit, match="clean worktree"):
+        mr.submit_prepared(
+            profile, "matrix-test", meta, spec, require_verified_smoke=True
+        )
+
+    monkeypatch.setattr(
+        mr, "_read_volume_json", lambda _path: {"commit": CODE["commit"], "dirty": False}
+    )
+    assert mr.submit_prepared(
+        profile, "matrix-test", meta, spec, require_verified_smoke=True
+    ) == "fc-1"
     assert checks == ["matrix-test"] and len(spawns) == 1
+
+
+def test_verified_smoke_gate_requires_exact_clean_provenance():
+    assert runmeta.verified_smoke_gate("smoke", None, None) is None
+    assert "cannot be verified" in runmeta.verified_smoke_gate(
+        "short", {"commit": None, "dirty": None}, None
+    )
+    assert "clean worktree" in runmeta.verified_smoke_gate(
+        "short", {"commit": CODE["commit"], "dirty": True}, CODE["commit"]
+    )
+    assert runmeta.verified_smoke_gate(
+        "short", {"commit": CODE["commit"], "dirty": False}, CODE["commit"]
+    ) is None
