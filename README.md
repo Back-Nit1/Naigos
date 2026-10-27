@@ -66,6 +66,22 @@ Three caveats that belong next to that table, not in a footnote:
   not the signature mechanic the design intended. Diagnosed in detail in
   [next-steps.md](next-steps.md) V-1.
 
+## What exists beyond the shipped result
+
+The table above is still the only trained-policy result. Everything below is
+infrastructure on `main`, built so the next result can be measured honestly.
+None of it has produced a published number yet.
+
+| piece | state | where |
+| --- | --- | --- |
+| Held-out route bank + diverse training routes | implemented; no retrained policy | [route-generalization](docs/route-generalization.md) |
+| v2 training protocol (multi-seed, provenance, report) | Phase 1 implemented; Phases 2-4 are design | [spec](docs/superpowers/specs/2026-10-09-v2-training-protocol-phase1-design.md), `scripts/run_protocol_v2.py` |
+| Model ladder: DeepSets v1 (shipped) and DeepSets + GRU-128 | both buildable and checkpointable via `naigos.rl.policies`; GRU has no trained result. Transformer and language planner are plans only | [model-ladder](docs/plans/model-ladder.md), `scripts/model_ladder.py` |
+| Resource world (`baseline-v0` default, `resource-world-v1/endurance` opt-in): fuel, diversion gates, exclusive L1 outcomes, a frozen resource bank and an L1 trace verifier | implemented and tested; baseline behaviour unchanged | [resource-world](docs/plans/resource-world.md), `naigos/env/resource*.py` |
+| Experiment matrices over policy x theatre x seed x resource preset | planner is inert (no Modal, no credentials); unsupported cells are refused before any job | [model-ladder-matrix](docs/model-ladder-matrix.md) |
+| Trajectory collection (opt-in, off by default) | recorders wired into PPO, evaluators, route/resource banks, pipeline and replay. **Nothing consumes the data**: no behaviour cloning, offline RL or LM training has been done | [TRAJECTORY_DATA](docs/TRAJECTORY_DATA.md), `naigos/trajectory/` |
+| Modal GPU training and scheduled pipeline | audited and fixed locally; **no GPU run yet** | [modal-readiness](docs/plans/modal-readiness.md) |
+
 ## Command cheat sheet
 
 Everything below is run from the repo root. `<aoi>` is one of `owens_valley`,
@@ -971,6 +987,9 @@ reuse the wrong terrain.
 | City buildings | Real OpenStreetMap footprints and roads (ODbL), extruded to heights from their `height`/`building:levels` tags or a documented fallback — **presentation only** (`--visual urban-presentation`). Never terrain, never radar cover, never read by LOS, detection or the policy. |
 | Training | Real MAPPO-Lagrangian runs with a reproducible learning curve, on CPU (1000 iterations). Every run records its device, iteration time, throughput and peak memory to `perf.json`. **No GPU run yet, so no GPU or speedup number is claimed anywhere in this repo.** |
 | CBF backstop | Implemented and wired behind `--cbf`. On the committed held-out artifact it removes trained-policy terrain losses (15 → 0), but costs objective rate (0.672 → 0.240). QP infeasibility (0.227) is reported, not hidden. |
+| Recurrent actor (GRU-128) | Implemented and checkpoint-tested, including hidden-state reset on world reroll in the live demo. **Untrained**: no result in this repo comes from it. |
+| Resource world | `baseline-v0` is the default and leaves the shipped checkpoint's pytree contract unchanged (tested). `resource-world-v1/endurance` is opt-in; its envelopes are initial experiment ranges, not calibrated facts. |
+| Trajectory data | Format and recorders are real and tested; recording is off by default and nothing downstream trains on it. |
 | Learned red / self-play | **Not implemented.** `LearnedRedStub` raises rather than falling back. |
 
 ## The guardrail
@@ -986,16 +1005,22 @@ allowlist refuses requests that drift that way
 ## Layout
 
 ```
-naigos/env/       JAX 3D flight env: airframe, terrain+LOS, detection, threats, obs, spatial hash
+naigos/env/       JAX 3D flight env: airframe, terrain+LOS, detection, threats, obs, spatial hash,
+                  resource.py + resource_bank.py (opt-in resource world, frozen resource bank)
 naigos/rl/        MAPPO + PPO-Lagrangian, DeepSets+attention nets, HOCBF-QP filter,
                   pure-numpy CMDP verifier, red team, Modal wrapper,
                   runmeta.py (run identity, cost profiles, run status, manifests,
                   writer locks, resume rules, output verification),
+                  policies.py (DeepSets v1 / GRU-128 specs and the small ladder factory),
+                  protocol_v2.py + experiment_matrix.py (multi-seed protocol, reviewed
+                  policy x theatre x seed x resource matrices),
+                  trajectory_recording.py (opt-in recorders for rollouts),
                   checkpoint.py (complete recovery state: params, both optimizer
                   states, RNG stream, curricula, history),
                   modal_pipeline.py (the scheduled learning pipeline on Modal)
 naigos/pipeline/  cloud learning decisions, stdlib only: snapshots, leases, jobs,
                   config, held-out evaluation, promotion gates, champion pointer
+naigos/trajectory/ NumPy-only trajectory schema and NPZ io (no JAX import)
 naigos/data/      DEM / airspace loaders (consume the research cache via component specs)
 naigos/research/  the research sub-agent: allowlisted fetch -> cache -> cited JSON;
                   aois/<aoi>.json holds the file-defined city theatres
@@ -1028,12 +1053,16 @@ scripts/          train_local.py (synthetic), train_theatre.py (cited DEM),
                   convert_checkpoint.py (one-way pickle -> Orbax migration),
                   repo_summary.py (the test count and artifact sizes this
                   README quotes, computed rather than hand-typed),
+                  model_ladder.py (expand and price an experiment matrix, inert),
+                  run_protocol_v2.py (plan / train-multi / report), benchmark_policy.py,
+                  sweep_cbf.py (CBF calibration sweep),
                   modal_runs.py (submit / status / logs / cancel / resume /
                   list / fetch / verify Modal runs), pipeline.py (status / promote /
                   pause / resume / retry / seed for the scheduled pipeline), emit helpers
-docs/             DEVLOG.md, DATA.md (provenance), STACK.md, artifacts/,
+docs/             DEVLOG.md, DATA.md (provenance), STACK.md, TRAJECTORY_DATA.md,
+                  plans/ (resource world, model ladder, Modal readiness), artifacts/,
                   theatres/ (one doc and one provenance doc per city theatre)
-tests/            1,456 collected tests (`uv run python scripts/repo_summary.py`
+tests/            1,773 collected tests (`uv run python scripts/repo_summary.py`
                   to recount); offline, no GPU; fixtures/ holds each city
                   theatre's coarse DEM and viewer terrain grid
 ```
