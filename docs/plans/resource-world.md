@@ -547,6 +547,17 @@ checkpoint resume, map/route randomization, CBF, and CBF sweep tests.
 - No Modal deployment, paid compute, credential change, or external system
   mutation.
 
+## Trajectory recording of L1 rollouts
+
+L1 rollouts can be recorded as trajectory datasets (opt-in; `docs/TRAJECTORY_DATA.md`).
+The actor's resource block is stored as `resource/observation`; absolute reserve
+and initial fuel, the recovery gates, the env's exclusive outcome code and the
+diversion state are `resource/*`; the true burn multiplier is declared
+`privileged/burn_multiplier` for auditing and is never part of an actor input.
+Fuel exhaustion is a terminal cause only under L1. Datasets embed the
+resource-bank protocol and digest, so a dataset cannot be confused with one
+from a different frozen bank. Collection only: no model has been trained on it.
+
 ## Recommended integration order after L1
 
 1. Land L1 and produce a CPU-only learning curve against direct, avoid-plus-nap,

@@ -45,6 +45,7 @@ naigos/rl/train.py -> modal_train.py           naigos/demo/replay.py -> demo.jso
 | benchmarks | `naigos/bench/` | `rl` + `data` | `pytest tests/test_bench_terrain.py` |
 | cloud learning pipeline | `naigos/pipeline/`, `naigos/rl/modal_pipeline.py`, `scripts/pipeline.py` | core (stdlib); Modal to deploy | `pytest tests/test_pipeline_*.py tests/test_research_roots.py` |
 | trajectory datasets | `naigos/trajectory/` | core (NumPy; no JAX) | `pytest tests/test_trajectory_data.py` |
+| trajectory recording | `naigos/rl/trajectory_recording.py` | `rl` | `pytest tests/test_trajectory_recording.py` |
 
 `.github/workflows/ci.yml` runs the whole table above on every push and PR --
 Python 3.12, `uv sync --all-extras --frozen`, `pytest -q` -- so "verify with"
@@ -86,8 +87,12 @@ through `naigos/data/theatre.py`, and every component names its cached bytes by
 sha256. `tests/test_data_chain.py` enforces both directions.
 
 **Trajectory datasets.** `naigos/trajectory/` is an isolated NumPy/NPZ boundary
-for future behavior cloning, failure analysis and offline evaluation. It is not
-wired into PPO. Immutable canonical metadata declares every dtype, shape, unit
+for future behavior cloning, failure analysis and offline evaluation. It stays
+framework-neutral; `naigos/rl/trajectory_recording.py` is the JAX adapter that
+writes it from the PPO collector, the evaluators, the route/resource banks, the
+pipeline evaluator and the demo replay. Recording is opt-in and off by default
+(`TrainConfig.recording`, `--record-trajectories`); nothing trains on the data
+yet. Immutable canonical metadata declares every dtype, shape, unit
 and normalization; bounded chunks carry arrays plus per-chunk hashes; a final
 manifest is written last and is the only completion marker. The fixed action
 components remain bank, flight-path angle and throttle. The complete contract
