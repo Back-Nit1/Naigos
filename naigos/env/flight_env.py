@@ -31,7 +31,13 @@ from . import resource as resource_mod
 from . import terrain as terrain_mod
 from . import threats as threats_mod
 from .airframe import AircraftState
-from .config import ROUTE_FAMILY_NAMES, TRAIN_ROUTE_CENTERS_DEG, EnvConfig, route_protocol_problems
+from .config import (
+    ROUTE_FAMILY_NAMES,
+    TRAIN_ROUTE_CENTERS_DEG,
+    EnvConfig,
+    resource_world_problems,
+    route_protocol_problems,
+)
 from .threats import RedScales, ThreatState, red_scales_from_cfg
 
 # EnvState.route for the legacy placement: due east, family west_east, legacy flag.
@@ -94,7 +100,7 @@ class NaigosEnv:
         generates synthetic terrain -- useful for tests and for domain
         randomisation, but the headline result should be run on a real DEM.
         """
-        problems = route_protocol_problems(cfg)
+        problems = route_protocol_problems(cfg) + resource_world_problems(cfg.resource)
         if problems:
             raise ValueError("invalid route configuration:\n" + "\n".join(f"  - {p}" for p in problems))
         self.cfg = cfg
@@ -375,15 +381,13 @@ class NaigosEnv:
         h = dt / cfg.substeps
         air_next = state.air
         for _ in range(cfg.substeps):
-            air_next = af_mod.step(cfg.airframe, air_next, action, h)
+            if cfg.resource.enabled:
+                air_next = af_mod.step(
+                    cfg.airframe, air_next, action, h, state.resource.burn_multiplier
+                )
+            else:
+                air_next = af_mod.step(cfg.airframe, air_next, action, h)
         air = jax.tree.map(lambda new, old: jnp.where(_bcast(frozen, new), old, new), air_next, state.air)
-        if cfg.resource.enabled:
-            # The existing airframe integrates the nominal burn. L1 applies an
-            # episode multiplier to that measured delta, without changing the
-            # baseline branch or its RNG stream.
-            nominal_used = jnp.maximum(fuel_before - air.fuel, 0.0)
-            fuel = jnp.maximum(fuel_before - nominal_used * state.resource.burn_multiplier, 0.0)
-            air = air._replace(fuel=jnp.where(frozen, fuel_before, fuel))
 
         # --- red team moves, using the picture it had at the start of the step -
         psi_cmd, speed_cmd = self.red_policy(
@@ -460,6 +464,11 @@ class NaigosEnv:
             & ~state.reached
             & ~state.resource.diverted
         )
+        if cfg.resource.enabled:
+            # A simultaneous physical loss is not a successful recovery. Keep
+            # the legacy ordering untouched, but make L1's exclusive outcome
+            # labels agree with the reached/diverted state flags.
+            arrive = arrive & ~shot & ~terrain_hit & ~oob & ~dry
 
         if cfg.resource.enabled:
             gate_dist = jnp.linalg.norm(
@@ -666,12 +675,20 @@ class NaigosEnv:
                 "gamma": state2.air.gamma,
                 "phi": state2.air.phi,
                 "speed": state2.air.speed,
+                "fuel": state2.air.fuel,
                 "alt_agl": info["alt_agl"],
                 "alive": state2.alive,
                 "reached": state2.reached,
                 "diverted": state2.resource.diverted,
                 "outcome": state2.resource.outcome,
                 "reserve_fuel": state2.resource.reserve_fuel,
+                "initial_fuel": state2.resource.initial_fuel,
+                "burn_multiplier": state2.resource.burn_multiplier,
+                "diversion_pos": state2.resource.diversion_pos,
+                "diversion_active": state2.resource.diversion_active,
+                "resource_observation": obs2.ego[:, -self.cfg.resource.observation_dim:]
+                if self.cfg.resource.enabled
+                else jnp.zeros((self.cfg.n_blue, 0), dtype=obs2.ego.dtype),
                 "action": action,
                 "cbf_feasible": feasible,
                 "terms": terms,

@@ -171,9 +171,19 @@ def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
     # (JAX float32 reductions), so a history produced before this split and one
     # produced after it are bit-identical.
     live = traj["alive"].astype(np.float32)
+    diverted = np.asarray(final.resource.diverted)
+    fuel_loss = np.asarray(traj["terms"].out_of_fuel)
+    terminal = np.asarray(final.reached) | diverted | ~np.asarray(final.alive)
+    final_fuel = np.asarray(final.air.fuel)
+    reserve = np.asarray(final.resource.reserve_fuel)
     return {
         "survival_rate": float(final.alive.mean()),
         "objective_rate": float(final.reached.mean()),
+        "diversion_rate": float(diverted.mean()),
+        "fuel_loss_rate": float(fuel_loss.sum() / (n_worlds * n_blue)),
+        "mean_terminal_reserve": float(
+            np.where(terminal, final_fuel - reserve, 0.0).sum() / max(terminal.sum(), 1)
+        ),
         "shootdown_rate": float(np.asarray(traj["terms"].shotdown).sum() / (n_worlds * n_blue)),
         **_exposure_metrics(traj, final, n_worlds, n_blue),
         "mean_lock": float((np.asarray(traj["terms"].lock_level) * live).sum() / max(live.sum(), 1)),
@@ -184,7 +194,7 @@ def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
         # flying into a hill.
         "terrain_rate": float(np.asarray(traj["terms"].terrain_violation).sum() / (n_worlds * n_blue)),
         "bounds_rate": float(np.asarray(traj["terms"].bounds_violation).sum() / (n_worlds * n_blue)),
-        "timeout_rate": float((final.alive & ~final.reached).mean()),
+        "timeout_rate": float((final.alive & ~final.reached & ~final.resource.diverted).mean()),
         # A filter that is infeasible most of the time is not a backstop. Report
         # it either way; see next-steps.md S-2.
         "cbf_infeasible_rate": float(

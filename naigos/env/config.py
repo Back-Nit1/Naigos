@@ -16,6 +16,7 @@ G0 = 9.80665  # m/s^2
 
 RESOURCE_WORLD_BASELINE = "baseline-v0"
 RESOURCE_WORLD_L1 = "resource-world-v1/endurance"
+RESOURCE_WORLD_MODELS = (RESOURCE_WORLD_BASELINE, RESOURCE_WORLD_L1)
 N_DIVERSION_GATES = 2
 
 # --- threat kinds -------------------------------------------------------------
@@ -261,6 +262,25 @@ class ResourceWorldConfig:
         # diversion margin, burn estimate; then 2 gates x
         # (body-frame x/y, range, bearing sin/cos, fuel margin, active).
         return 6 + N_DIVERSION_GATES * 7 if self.enabled else 0
+
+
+def resource_world_problems(cfg: ResourceWorldConfig) -> list[str]:
+    """Return configuration errors instead of silently falling back to L0."""
+    problems: list[str] = []
+    if cfg.model not in RESOURCE_WORLD_MODELS:
+        problems.append(f"resource.model {cfg.model!r} is not one of {RESOURCE_WORLD_MODELS}")
+    for name, bounds in (
+        ("fuel_budget_ratio", cfg.fuel_budget_ratio),
+        ("reserve_ratio", cfg.reserve_ratio),
+        ("burn_multiplier", cfg.burn_multiplier),
+    ):
+        if len(bounds) != 2 or bounds[0] <= 0 or bounds[1] < bounds[0]:
+            problems.append(f"resource.{name} must be a positive ordered (low, high) pair")
+    if not 0.0 <= cfg.gate_lateral_frac < 0.5:
+        problems.append("resource.gate_lateral_frac must be in [0, 0.5)")
+    if cfg.gate_arrival_radius <= 0:
+        problems.append("resource.gate_arrival_radius must be positive")
+    return problems
 
 
 @dataclass(frozen=True)
