@@ -85,4 +85,3 @@ def test_first_fuel_exhaustion_is_one_terminal_loss_and_one_cmdp_cost():
     assert float(constraint_cost(second)[0]) == 0.0
     np.testing.assert_array_equal(frozen.air.pos, dead.air.pos)
     assert int(frozen.resource.outcome[0]) == OUTCOME_FUEL
-

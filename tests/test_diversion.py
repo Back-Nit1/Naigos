@@ -87,4 +87,3 @@ def test_reward_orders_primary_above_divert_above_timeout_and_loss():
     timeout = float(compute(_terms(), weights)[0])
     loss = float(compute(_terms(out_of_fuel=1.0), weights)[0])
     assert primary > divert > timeout > loss
-

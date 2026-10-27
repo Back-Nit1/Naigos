@@ -86,4 +86,3 @@ def test_episode_accounting_counts_each_diversion_once():
     updated, _, _ = jax.jit(train)(learner, rollout, key)
     assert float(updated.episode_accum) == PPO.n_envs
     assert float(updated.cost_accum) == 0.0
-

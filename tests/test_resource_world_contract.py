@@ -141,4 +141,3 @@ def test_hidden_outcome_label_is_not_in_the_actor_observation():
 def test_unknown_resource_model_is_refused_instead_of_falling_back():
     with pytest.raises(ValueError, match="resource.model"):
         NaigosEnv(_cfg().replace(resource=ResourceWorldConfig(model="resource-world-v9")))
-

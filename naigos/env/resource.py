@@ -220,4 +220,3 @@ def outcome_update(previous, primary, diverted, shot, terrain, bounds, dry, time
     for code in reversed(OUTCOME_PRECEDENCE):  # lowest priority first, so higher overwrites
         new = jnp.where(events[code], code, new)
     return jnp.where(previous == OUTCOME_ONGOING, new, previous).astype(jnp.uint8)
-
