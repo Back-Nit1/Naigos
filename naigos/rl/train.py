@@ -42,8 +42,18 @@ from ..env.threats import red_scales_from_cfg
 from . import checkpoint as ckpt
 from . import runmeta
 from .ppo import PPOConfig, greedy_policy, init_learner, init_rollout, make_train
+from .protocol_v2 import plateau_reason
 from .red_team import CurriculumDecision, CurriculumError, CurriculumState, RedCurriculum
 from .reward import RewardCurriculum, RewardWeights
+
+
+@dataclasses.dataclass(frozen=True)
+class PlateauConfig:
+    """Stop early once the red curriculum has been `held` at `red_level` for
+    `min_evaluations` distinct evaluations (`protocol_v2.plateau_reason`)."""
+
+    red_level: float = 1.0
+    min_evaluations: int = 3
 
 
 @dataclasses.dataclass
@@ -60,12 +70,19 @@ class TrainConfig:
     # boundary and log it per route family to route_eval.json. Off by default:
     # a run without it writes exactly the files and history rows it always did.
     route_eval: bool = False
+    #: Optional provenance copied onto every route-evaluation row. Multi-theatre
+    #: training uses this to identify which AOI produced a row in the shared
+    #: route_eval.json instead of silently mixing theatres.
+    route_eval_context: dict | None = None
     #: What to do when `resume_from` names a checkpoint written before the red
     #: curriculum kept smoothing state. "strict" refuses with a migration
     #: message; "reset" continues with an empty window, which means the level
     #: cannot move again until `min_evaluations` fresh evaluations have been
     #: observed. Never silent either way.
     curriculum_resume: str = "strict"
+    #: Early stop on a curriculum plateau; `iterations` stays the hard cap. None
+    #: (the default) is the fixed-iteration loop, with no extra history columns.
+    plateau: PlateauConfig | None = None
 
 
 def device_report() -> dict:
@@ -503,6 +520,10 @@ def run(
     env_cfg = env_cfg or EnvConfig()
     ppo_cfg = ppo_cfg or PPOConfig()
     train_cfg = train_cfg or TrainConfig()
+    plateau = train_cfg.plateau
+    if plateau is not None and plateau.min_evaluations < 1:
+        raise CurriculumError(f"plateau.min_evaluations must be at least 1, got {plateau.min_evaluations}")
+    plateau_hit: str | None = None  # set once the predicate fires; the NEXT iteration is the last
 
     out = Path(train_cfg.out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -632,8 +653,10 @@ def run(
     def route_eval_row(it: int, phase: str, policy_name: str, policy) -> dict:
         res = evaluate_route_bank(env, policy, use_cbf=train_cfg.use_cbf and policy_name == "learner",
                                   training_seeds=[train_cfg.seed])
-        route_log["evaluations"].append({"iter": it, "phase": phase, "policy": policy_name,
-                                         "red_level": level, **res})
+        row = {"iter": it, "phase": phase, "policy": policy_name, "red_level": level, **res}
+        if train_cfg.route_eval_context is not None:
+            row["context"] = dict(train_cfg.route_eval_context)
+        route_log["evaluations"].append(row)
         runmeta.write_json(out / ROUTE_EVAL_FILENAME, route_log)
         return res
 
@@ -694,6 +717,10 @@ def run(
                 f"{train_cfg.iterations}: nothing to continue."
             )
             return learner, history
+        if plateau is not None and plateau_reason(history, plateau.red_level, plateau.min_evaluations):
+            print(f"[resume] the checkpoint's history is already at its plateau (iteration {start_iter}): "
+                  "nothing to continue.")
+            return learner, history
 
     def fresh_rollout(env, it, red_scales=None):
         # Keyed on (seed, iteration) and kept off the main key chain, so a resume
@@ -728,7 +755,8 @@ def run(
         # The final iteration always evaluates, so `history.json` ends at the
         # iteration the run claims to have reached. Without it a completed run
         # and one that stopped after its last eval boundary look identical.
-        if it % train_cfg.eval_every == 0 or it == 1 or it == train_cfg.iterations:
+        last = it == train_cfg.iterations or plateau_hit is not None
+        if it % train_cfg.eval_every == 0 or it == 1 or last:
             key, k_eval = jax.random.split(key)
             ev = evaluate(env, learner.actor.params, train_cfg.eval_worlds, k_eval, train_cfg.use_cbf)
             shootdown_rate = ev["shootdown_rate"]
@@ -776,6 +804,7 @@ def run(
                 "curriculum_min_evaluations": int(red_cur.min_evaluations),
                 # The recovery carrier: see `curriculum_state_from_history`.
                 "curriculum_state": cstate.to_dict(),
+                **({"plateau_reason": None} if plateau is not None else {}),
                 **metrics,
                 **ev,
             }
@@ -852,6 +881,7 @@ def run(
                     **({"resumed_from_iteration": start_iter} if resume_info["resumed"] else {}),
                     "wall_s": round(time.time() - t0, 1),
                     "red_level": float(level),
+                    **({"plateau_reason": None} if plateau is not None else {}),
                     **tele,
                 })
                 (out / runmeta.HISTORY_FILENAME).write_text(json.dumps(history, indent=2))
@@ -862,6 +892,11 @@ def run(
                 f"{decision.window_n} eval(s) ({decision.n_since_change} since the level "
                 f"last moved) | red {decision.level_before:.2f} to {decision.level_after:.2f}"
             )
+
+            if plateau is not None and plateau_hit is None:
+                plateau_hit = plateau_reason(history, plateau.red_level, plateau.min_evaluations)
+                if plateau_hit:
+                    print(f"[plateau {it:4d}] {plateau_hit}; the next iteration is the last")
 
             weights, sw, ew = rew_cur.weights_for(base_w, shootdown_rate)
             if new_level != level:
@@ -888,7 +923,10 @@ def run(
                 # silently inflating the reported throughput.
                 recompiled = True
 
-        if it % train_cfg.checkpoint_every == 0 or it == train_cfg.iterations:
+        if last and plateau_hit is not None:
+            # the last row says why the run ended where it did (null = hit the cap)
+            history[-1]["plateau_reason"] = plateau_hit
+        if it % train_cfg.checkpoint_every == 0 or last:
             # `key` is saved at the END of the iteration, after every split this
             # iteration performed, so a resume continues the same stream rather
             # than replaying part of it. Everything else needed to continue --
@@ -918,11 +956,13 @@ def run(
             )
             persist({"last_iteration": it, "iterations_declared": train_cfg.iterations,
                      "event": "checkpoint"})
+        if last:
+            break
 
     (out / runmeta.HISTORY_FILENAME).write_text(json.dumps(history, indent=2))
     final_perf = perf_snapshot(time.time() - t0)
     runmeta.write_json(out / runmeta.PERF_FILENAME, final_perf)
-    persist({"last_iteration": train_cfg.iterations,
+    persist({"last_iteration": it,
              "iterations_declared": train_cfg.iterations, "event": "final"})
     print(
         f"[perf] {final_perf['iterations_timed']} timed iterations, "

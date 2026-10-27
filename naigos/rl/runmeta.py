@@ -45,6 +45,9 @@ SMOKE_MARKER = ".smoke_ok"  # written at the runs root, not inside a run dir
 # can traverse out of the runs root, collide after normalisation, or confuse a
 # shell is rejected here rather than at the filesystem.
 RUN_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+PLATEAU_REASON_RE = re.compile(
+    r"^plateau: red level -?(?:\d+(?:\.\d*)?|\.\d+) held across [1-9]\d* evaluations$"
+)
 #: Names already taken at the Volume root by something that is not a run. The
 #: cloud learning pipeline keeps its whole namespace under `/pipeline`
 #: (`naigos/pipeline/layout.py`); a detached run by that name would write its
@@ -373,7 +376,7 @@ def smoke_gate(profile: str, marker: dict | None, commit: str | None) -> str | N
     if not marker:
         return (
             "no smoke run is recorded on the volume. Run "
-            "`modal run naigos/rl/modal_train.py --profile smoke` first, "
+            "`modal run -m naigos.rl.modal_train --profile smoke` first, "
             "or pass --skip-smoke-gate to override."
         )
     if commit is None or marker.get("commit") is None:
@@ -398,12 +401,16 @@ def _checkpoint_iters(directory: Path) -> list[int]:
     return sorted(out)
 
 
-def verify_run_dir(directory: str | os.PathLike) -> list[str]:
+def verify_run_dir(directory: str | os.PathLike, *, assume_finalizing: bool = False) -> list[str]:
     """Return the list of problems with a fetched run directory. Empty is good.
 
     This is the check that a run which hit the timeout, silently fell back to
     CPU, or was interrupted before its first checkpoint does not read as a
     completed GPU run.
+
+    `assume_finalizing` is for the worker verifying its own run just before it
+    marks the manifest completed: its own `running` status is then expected, and
+    is the only thing excused.
     """
     directory = Path(directory)
     problems: list[str] = []
@@ -440,13 +447,26 @@ def verify_run_dir(directory: str | os.PathLike) -> list[str]:
             history = json.loads(hpath.read_text())
         except json.JSONDecodeError as e:
             problems.append(f"{HISTORY_FILENAME} does not parse: {e}")
+    # A run that ended on a curriculum plateau (`TrainConfig.plateau`) says so on its
+    # last row. That is a completed run short of its cap, so it is held to the
+    # iteration it stopped at, not to `declared` -- but it must still have a
+    # checkpoint there.
+    plateau_stop = False
+    plateau_iteration = None
     if isinstance(history, list) and history:
+        last_reason = history[-1].get("plateau_reason") if isinstance(history[-1], dict) else None
+        plateau_stop = isinstance(last_reason, str) and PLATEAU_REASON_RE.fullmatch(last_reason) is not None \
+            and isinstance(history[-1].get("iter"), int)
+        if last_reason and not plateau_stop:
+            problems.append(f"unrecognized plateau_reason on final history row: {last_reason!r}")
+        if plateau_stop:
+            plateau_iteration = history[-1]["iter"]
         iters = [row.get("iter") for row in history]
         if any(i is None for i in iters):
             problems.append(f"{HISTORY_FILENAME} has a row with no `iter`")
         elif any(b < a for a, b in zip(iters, iters[1:])):
             problems.append(f"{HISTORY_FILENAME} iterations are not monotonic: two runs in one directory?")
-        elif declared and iters[-1] < declared:
+        elif declared and iters[-1] < declared and not plateau_stop:
             problems.append(
                 f"run stopped at iteration {iters[-1]} of {declared}: truncated, not a completed run"
             )
@@ -456,7 +476,13 @@ def verify_run_dir(directory: str | os.PathLike) -> list[str]:
     ckpts = _checkpoint_iters(directory)
     if not ckpts:
         problems.append("no checkpoints: nothing was persisted")
-    elif declared and ckpts[-1] < declared:
+    elif plateau_stop and plateau_iteration not in ckpts:
+        problems.append(f"no checkpoint at plateau stop iteration {plateau_iteration}")
+    elif plateau_stop and ckpts[-1] != plateau_iteration:
+        problems.append(
+            f"checkpoint iteration {ckpts[-1]} exists after plateau stop iteration {plateau_iteration}"
+        )
+    elif declared and not plateau_stop and ckpts[-1] < declared:
         problems.append(f"last checkpoint is iteration {ckpts[-1]} of {declared}")
 
     perf = None
@@ -500,7 +526,7 @@ def verify_run_dir(directory: str | os.PathLike) -> list[str]:
         verdict = classify_status(
             man, checkpoints=[i for i in _checkpoint_iters(directory)]
         )
-        if verdict["status"] != COMPLETED:
+        if verdict["status"] != COMPLETED and not (assume_finalizing and verdict["status"] == RUNNING):
             problems.append(
                 f"{MANIFEST_FILENAME} status is {verdict['status']!r}"
                 + (f" ({verdict['termination_reason']})" if verdict["termination_reason"] else "")
@@ -1081,6 +1107,12 @@ RESUME_BLOCKING_KEYS = (
     "config.n_envs",
     "config.n_steps",
     "config.iterations",
+    "config.route_mode",
+    "config.route_eval",
+    "config.map_randomize",
+    "config.obs_edge_features",
+    "config.plateau",
+    "config.block_iterations",
     # Not a `run.json` field: the curricula live in code, so only a code change
     # can move them. Named here so it is a legal `--override-resume` key and so
     # `naigos.rl.checkpoint` and this module share one vocabulary.

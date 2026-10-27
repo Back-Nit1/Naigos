@@ -153,3 +153,57 @@ commands — one submission per run in the 15-run matrix, driven by
   config so the test runs fast and offline).
 - No change to any existing test's expected values — `plateau=None` is the
   default and must be behaviorally identical to today.
+
+## Implementation audit (2026-10-26)
+
+The design was checked against the code before it was implemented. Where the
+design and the code disagreed, the code won; each deviation is listed here.
+
+**Deviations from the design**
+
+- `device_report()` lives in `train.py`, not `runmeta.py`, and reports only `jax`.
+  Dependency versions (jax, jaxlib, flax, optax, orbax-checkpoint, numpy) come
+  from `importlib.metadata` in `protocol_v2.provenance_manifest`.
+- Baselines are scored with `evaluate_route_bank(env, BASELINE_POLICIES[...])`, not
+  `baseline()`. `baseline()` draws random keys and does not play the route bank, so it
+  would not be "the same scenarios" as the learner. The table builder additionally
+  refuses to build if the baseline value differs between two policies on one theatre.
+- "plateau_reason null when unset" and "no new history columns when unset" contradict
+  each other. Resolved as: the column exists only when `TrainConfig.plateau` is set;
+  `null` means the run hit its `iterations` cap, a string means it plateaued.
+- A plateau seen at a tick makes the *next* iteration the last (forced final evaluation +
+  checkpoint), so a plateau-stopped run ends like a capped run: a final eval row and a
+  checkpoint at the stop iteration. `runmeta.verify_run_dir` accepts a short run only if
+  its last row carries `plateau_reason` and a checkpoint exists at that iteration.
+- The streak counts distinct *evaluations* (`curriculum_evals_total`), not ticks, since
+  ticks between evaluations repeat the same evaluation.
+- Multi-theatre runs have no plateau inside a block; the driver stops rotating once the
+  plateau predicate holds over the single history that spans all theatres.
+- Evaluation is at a fixed `--eval-red-level` (default 1.0) for every policy and both
+  baselines, rebuilt from the final checkpoint. The in-run `route_eval.json` rows are
+  not used (next item).
+- The Modal path (`modal_runs.py submit`, `modal_train.py`) does not carry
+  `route_mode`/`route_eval`/`map_randomize`/`obs_edge_features`/`plateau`, so the plan
+  emits local `scripts/train_theatre.py` commands. Remote plumbing is a separate step.
+
+**Finding that predates this work (not fixed here): evaluation ignores the red level after G-4**
+
+Since `10adb4b`, a promotion no longer rebuilds `NaigosEnv`, and `NaigosEnv.rollout`
+resets from `env.cfg`, which `run()` builds once at the starting level. So
+`evaluate()`, `baseline()` and the in-run route evaluation keep scoring at the starting
+red difficulty, while training and the logged `red_level` move on. Measured (synthetic
+16-threat env, 300 steps, 64 worlds): avoid+nap survival is 0.855 at red level 0 and
+0.223 at level 1.0, so the gap is not small. Consequences: the survival statistic that
+drives the curriculum (and therefore the plateau predicate) is measured at the starting
+level; and the `route_*` columns in `history.json` are labelled with a level they were
+not measured at. Fixing it changes fixed-iteration behaviour, so it needs its own
+decision; the plateau predicate and `build_report` are written not to depend on it
+(the report re-scores everything itself).
+
+**Statistics at n=3**
+
+The percentile bootstrap over 3 seeds is exactly [min, max] of the seeds (the all-min and
+all-max resamples each have probability 1/27, above alpha/2). A claim is therefore
+asserted only when every seed clears the comparator. That is conservative against false
+positives from a lucky seed, but it is not a calibrated 95% interval, and the ~40 claims
+tested are uncorrected for multiplicity; the report prints both caveats.

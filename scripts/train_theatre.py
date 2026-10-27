@@ -22,7 +22,8 @@ from naigos.rl import runmeta
 from naigos.rl.ppo import PPOConfig
 from naigos.rl.red_team import RedCurriculum
 from naigos.rl.reward import RewardCurriculum, RewardWeights
-from naigos.rl.train import TrainConfig, run
+from naigos.rl.train import PlateauConfig, TrainConfig, run
+from naigos.research.aoi import DEFAULT_AOI
 
 
 def _resume_checkpoint(out, meta, overrides):
@@ -96,6 +97,9 @@ if __name__ == "__main__":
     ap.add_argument("--route-eval", action="store_true",
                     help="also score every eval on the frozen route bank (held-out route "
                          "geometry), per route family, into route_eval.json")
+    ap.add_argument("--plateau", action="store_true",
+                    help="stop early once the red curriculum has held level 1.0 for 3 evaluations "
+                         "(--iterations stays the hard cap). See docs/superpowers/specs/2026-10-09-v2-*")
     ap.add_argument("--resume", action="store_true",
                     help="continue --out from its most recent valid checkpoint")
     ap.add_argument("--override-resume", action="append", default=[], metavar="KEY",
@@ -129,6 +133,12 @@ if __name__ == "__main__":
         meta["config"]["route_mode"] = a.route_mode
     if a.route_eval:
         meta["config"]["route_eval"] = True
+    if a.map_randomize:
+        meta["config"]["map_randomize"] = True
+    if a.edge_obs:
+        meta["config"]["obs_edge_features"] = True
+    if a.plateau:
+        meta["config"]["plateau"] = True
     resume_from = _resume_checkpoint(out, meta, a.override_resume) if a.resume else None
     try:
         runmeta.write_metadata(out, meta)
@@ -148,7 +158,9 @@ if __name__ == "__main__":
         cfg,
         PPOConfig(n_envs=a.envs, n_steps=a.steps),
         TrainConfig(iterations=a.iterations, out_dir=a.out, seed=a.seed, eval_every=20,
-                    checkpoint_every=100, use_cbf=a.cbf, route_eval=a.route_eval),
+                    checkpoint_every=100, use_cbf=a.cbf, route_eval=a.route_eval,
+                    route_eval_context={"aoi": a.aoi or DEFAULT_AOI} if a.route_eval else None,
+                    plateau=PlateauConfig() if a.plateau else None),
         hmap=hmap,
         meta=meta,
         resume_from=resume_from,
