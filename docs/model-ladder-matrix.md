@@ -16,6 +16,11 @@ hyperparameter preset. Only policy implementations registered in
 integration exists, but the submission path refuses every unsupported cell
 before spawning the first job.
 
+The scenario suite is currently fixed to the built-in `route-bank-v1` name and
+digest. A different label or digest is rejected during planning because the
+Modal worker does not yet accept a suite selector; recording a custom value
+would claim provenance for scenarios that never executed.
+
 ## Example
 
 These prices are example operator inputs, **not current Modal pricing**. Replace

@@ -157,6 +157,16 @@ def test_unsupported_cells_can_be_planned_but_never_mislabeled_as_submittable():
         em.remote_spec(exp)
 
 
+def test_noncanonical_scenario_suite_cannot_be_recorded_as_if_it_executed():
+    with pytest.raises(em.MatrixError, match="custom suites are not wired"):
+        em.build_plan(
+            _config(
+                scenario_suite={"name": "invented-suite", "sha256": "0" * 64}
+            ),
+            code=CODE,
+        )
+
+
 def test_cli_defaults_to_local_dry_run_and_never_reaches_submit(monkeypatch, tmp_path, capsys):
     cli = _load_script("model_ladder")
     path = tmp_path / "matrix.json"

@@ -231,6 +231,15 @@ def build_plan(config: Mapping[str, Any], *, code: Mapping[str, Any] | None = No
     scenario = {"name": _label(scenario["name"], "scenario_suite.name"), "sha256": scenario["sha256"]}
     if not isinstance(scenario["sha256"], str) or not _SHA256_RE.fullmatch(scenario["sha256"]):
         raise MatrixError("scenario_suite.sha256 must be 64 lower-case hex characters")
+    canonical_scenario = {
+        "name": ROUTE_BANK_VERSION,
+        "sha256": ROUTE_BANK_V1_SHA256,
+    }
+    if scenario != canonical_scenario:
+        raise MatrixError(
+            "scenario_suite must equal the executable built-in route bank "
+            f"{canonical_scenario!r}; custom suites are not wired into the Modal trainer"
+        )
 
     code_record = _plain(code if code is not None else {"commit": None, "dirty": None})
     experiments = []
