@@ -590,6 +590,19 @@ def run(
         f"x{dev['device_count']} {', '.join(dev['devices']) or 'unknown'}"
     )
     if meta is not None:
+        if env_cfg.resource.enabled:
+            from ..env.resource_bank import resource_protocol
+
+            meta = {
+                **meta,
+                "config": {
+                    **(meta.get("config") or {}),
+                    "environment_model_id": env_cfg.resource.model,
+                    "observation_schema_id": ckpt.RESOURCE_OBSERVATION_SCHEMA,
+                    "resource_config": dataclasses.asdict(env_cfg.resource),
+                    "resource_bank": resource_protocol(),
+                },
+            }
         meta = {**meta, "runtime": {**(meta.get("runtime") or {}), **dev}}
         meta, fresh = runmeta.write_metadata(out, meta)
         print(f"[run] {'wrote' if fresh else 'matched existing'} {out / runmeta.META_FILENAME}")
@@ -654,6 +667,7 @@ def run(
 
     blob = ckpt.load(resume_from) if resume_from is not None else None
     if blob is not None:
+        ckpt.require_environment_compatible(blob, env_cfg, resume_from)
         rec = blob["recovery"]
         # Restore the curriculum state BEFORE building the env, because the env
         # is a function of the red level and the reward weights are a function

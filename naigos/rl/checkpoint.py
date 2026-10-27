@@ -72,6 +72,11 @@ from . import runmeta
 from .ppo import Learner
 from .red_team import RedCurriculum
 from .reward import RewardCurriculum, RewardWeights
+from ..env.config import (
+    RESOURCE_WORLD_BASELINE,
+    RESOURCE_WORLD_L1,
+    ResourceWorldConfig,
+)
 
 #: 1 = the policy-export format written before resume existed. 2 added
 #: `recovery`. 3 added the lifetime CMDP accumulators (`cost_accum`,
@@ -81,6 +86,11 @@ from .reward import RewardCurriculum, RewardWeights
 #: changed. `load` only understands schema 4; a pre-4 checkpoint must go
 #: through `scripts/convert_checkpoint.py` first.
 CHECKPOINT_SCHEMA = 4
+
+BASELINE_OBSERVATION_SCHEMA = "Observation-v0"
+RESOURCE_OBSERVATION_SCHEMA = "ResourceObservation-v1"
+BASELINE_ACTOR_SCHEMA = "ActorV1"
+RESOURCE_ACTOR_SCHEMA = "ActorV2"
 
 REQUIRED_RECOVERY_KEYS = (
     "iteration",
@@ -244,6 +254,18 @@ def save(
         "red_level": float(red_level),
         "iter": int(iteration),
         "env_cfg": dataclasses.asdict(env_cfg),
+        # Environment/actor semantics. Their absence in an existing schema-4
+        # checkpoint means baseline-v0; resource checkpoints never rely on that
+        # fallback and carry the full fixed-capacity configuration explicitly.
+        "environment_model_id": env_cfg.resource.model,
+        "observation_schema_id": (
+            RESOURCE_OBSERVATION_SCHEMA if env_cfg.resource.enabled else BASELINE_OBSERVATION_SCHEMA
+        ),
+        "actor_schema_id": RESOURCE_ACTOR_SCHEMA if env_cfg.resource.enabled else BASELINE_ACTOR_SCHEMA,
+        "resource_config": dataclasses.asdict(env_cfg.resource),
+        "resource_bank": (
+            _resource_bank_record() if env_cfg.resource.enabled else None
+        ),
         # --- everything needed to continue ---
         "recovery": {
             "iteration": int(iteration),
@@ -278,6 +300,7 @@ def save(
             "run_name": run_name,
             "code_commit": code_commit,
             "resumed_from": list(resumed_from or []),
+            "resource_curriculum": {"kind": "fixed-v1", "state": None},
         },
     }
     tmp = path.with_name(path.name + ".tmp")
@@ -429,7 +452,62 @@ def obs_config_from_blob(blob: dict) -> dict:
     not record it, and was trained without it.
     """
     env_cfg = blob.get("env_cfg") or {}
-    return {"obs_edge_features": bool(env_cfg.get("obs_edge_features", False))}
+    out = {"obs_edge_features": bool(env_cfg.get("obs_edge_features", False))}
+    if environment_model_from_blob(blob) == RESOURCE_WORLD_L1:
+        out["resource"] = resource_config_from_blob(blob)
+    return out
+
+
+def _resource_bank_record() -> dict:
+    from ..env.resource_bank import resource_protocol
+
+    protocol = resource_protocol()
+    return {"version": protocol["bank"], "sha256": protocol["bank_sha256"]}
+
+
+def environment_model_from_blob(blob: dict) -> str:
+    """Missing schema-4 field means baseline-v0, never an implicit upgrade."""
+    return str(blob.get("environment_model_id") or RESOURCE_WORLD_BASELINE)
+
+
+def resource_config_from_blob(blob: dict) -> ResourceWorldConfig:
+    model = environment_model_from_blob(blob)
+    if model == RESOURCE_WORLD_BASELINE:
+        return ResourceWorldConfig()
+    if model != RESOURCE_WORLD_L1:
+        raise CheckpointError(f"checkpoint names unsupported environment model {model!r}")
+    raw = blob.get("resource_config")
+    if not isinstance(raw, dict):
+        raise CheckpointError(
+            f"{RESOURCE_WORLD_L1} checkpoint is missing its resource_config; implicit migration is refused"
+        )
+    fields = {field.name for field in dataclasses.fields(ResourceWorldConfig)}
+    values = {name: value for name, value in raw.items() if name in fields}
+    for name in ("fuel_budget_ratio", "reserve_ratio", "burn_multiplier", "active_gate_mask"):
+        if name in values:
+            values[name] = tuple(values[name])
+    config = ResourceWorldConfig(**values)
+    if config.model != model:
+        raise CheckpointError(
+            f"checkpoint environment_model_id {model!r} disagrees with resource_config.model {config.model!r}"
+        )
+    return config
+
+
+def require_environment_compatible(blob: dict, cfg, source) -> None:
+    """Refuse cross-loading L0/ActorV1 and L1/ActorV2 checkpoints."""
+    saved_model = environment_model_from_blob(blob)
+    saved_obs = str(blob.get("observation_schema_id") or BASELINE_OBSERVATION_SCHEMA)
+    wanted_obs = RESOURCE_OBSERVATION_SCHEMA if cfg.resource.enabled else BASELINE_OBSERVATION_SCHEMA
+    saved_actor = str(blob.get("actor_schema_id") or BASELINE_ACTOR_SCHEMA)
+    wanted_actor = RESOURCE_ACTOR_SCHEMA if cfg.resource.enabled else BASELINE_ACTOR_SCHEMA
+    if (saved_model, saved_obs, saved_actor) != (cfg.resource.model, wanted_obs, wanted_actor):
+        raise CheckpointError(
+            f"{source}: checkpoint is {saved_model}/{saved_obs}/{saved_actor}, but the environment is "
+            f"{cfg.resource.model}/{wanted_obs}/{wanted_actor}; cross-schema loading is refused"
+        )
+    if cfg.resource.enabled and dataclasses.asdict(resource_config_from_blob(blob)) != dataclasses.asdict(cfg.resource):
+        raise CheckpointError(f"{source}: checkpoint resource_config differs from the requested L1 environment")
 
 
 def require_actor_ego_dim(actor_params, cfg, source) -> None:
@@ -442,6 +520,7 @@ def require_actor_ego_dim(actor_params, cfg, source) -> None:
     if got != cfg.ego_dim:
         raise SystemExit(
             f"{source}: the actor takes a {got}-wide ego observation but this env builds "
-            f"{cfg.ego_dim} (obs_edge_features={cfg.obs_edge_features}). The checkpoint's "
+            f"{cfg.ego_dim} (obs_edge_features={cfg.obs_edge_features}, "
+            f"environment_model_id={cfg.resource.model}). The checkpoint's "
             f"env_cfg does not describe the observation its actor was trained on."
         )
