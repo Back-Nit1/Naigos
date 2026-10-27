@@ -12,6 +12,9 @@ research = [
   "py3dep>=0.16",
   "rasterio>=1.3",
   "xarray>=2023.1",
+  # LAZ decoding for the physics-grade urban obstacle build (naigos.research.sources.urban_physics).
+  # Imported only when a lidar tile is actually downloaded; a cached rerun never needs it.
+  "laspy[lazrs]>=2.5",
 ]
 data = ["numpy>=1.24", "rasterio>=1.3"]
 # orbax-checkpoint was already a transitive dependency of flax; naigos/rl/checkpoint.py

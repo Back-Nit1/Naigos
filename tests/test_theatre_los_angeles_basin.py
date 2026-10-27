@@ -121,14 +121,20 @@ def test_a_second_research_run_uses_the_cache(tmp_path, monkeypatch):
             f"urban_ground/{AOI}/{a.fingerprint}/10m": ("usgs_3dep", "urban_src/g.tif"),
             f"urban_lidar_rasters/{AOI}/{a.fingerprint}/10m": ("usgs_3dep_lidar", "urban_src/l.npz"),
             f"lidar/{up.LIDAR[AOI]['collection']}/ept": ("usgs_3dep_lidar", "lidar/ept.json"),
+            f"dem/{AOI}/30m/{a.fingerprint}": ("usgs_3dep", "terrain/x.tif"),
+            f"open_meteo/profile/{AOI}/{a.fingerprint}": ("open_meteo", "atmosphere/x.json"),
         }
         for key, (src, rel) in seeded.items():
-            body = b'{"cached": true}' if rel.endswith(".json") else b"cached"
+            body = b'{"hourly": {"time": []}}' if rel.endswith(".json") else b"cached"
             (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
             (tmp_path / rel).write_bytes(body)
             cache.record(key, src, "https://example.invalid", rel, body)
         assert up.fetch_ground(a, gs).path == "urban_src/g.tif"
         assert up.fetch_lidar(a, gs).path == "urban_src/l.npz"
+        from naigos.research.sources import atmosphere
+
+        assert terrain.fetch_dem(a).path == "terrain/x.tif"
+        assert atmosphere.fetch_profile(a).path == "atmosphere/x.json"
 
 
 def test_the_builder_only_talks_to_allowlisted_hosts():

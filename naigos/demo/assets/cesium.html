@@ -435,7 +435,7 @@ function layerLines(o) {
   let ptxt;
   if (pu.state === "available") {
     const e = pu.evidence || {};
-    ptxt = (o.physUrbanDrawn ? "drawn" : "not drawn in this mode") + " — " + e.nx + "×" + e.ny + " @ "
+    ptxt = (o.physUrbanDrawn ? "drawn" : (o.physUrbanHidden ? "hidden while relief is exaggerated" : "not drawn in this mode")) + " — " + e.nx + "×" + e.ny + " @ "
       + e.cell_m + " m, " + (100 * e.coverage_fraction).toFixed(1) + "% covered, "
       + String(e.content_sha256 || "").slice(0, 10);
   } else if (pu.state === "unavailable") {
@@ -916,6 +916,8 @@ async function boot() {
   // the claim this viewer exists to demonstrate. So every altitude in this file
   // goes through c3()/exagZ(), and exaggeration defaults to x1.
   let EXAG_K = 1.0;
+  // Set by the physics-obstacle block below (a later const): hides that surface while relief is exaggerated.
+  let physSync = null;
   let hillshadeLayer = null;
   // Which surface is on screen. Declared here because applyDepthTest() below
   // reads it; "physics" until something deliberately changes it.
@@ -1618,6 +1620,7 @@ async function boot() {
     exagBtn.textContent = `relief x${EXAG_K}`;
     exagBtn.classList.toggle("on", EXAG_K !== 1);
     // Opt-in and never silent: while the multiplier is on, the globe says so.
+    if (physSync) physSync();
     exagBadge.hidden = EXAG_K === 1;
     exagBadge.textContent = `VERTICAL EXAGGERATION x${EXAG_K} -- relief, aircraft, threats, `
       + "envelopes and LOS rays scaled together for legibility; physics used x1";
@@ -1684,7 +1687,14 @@ async function boot() {
   // and draws nothing in its place.
   const PHYSU = scene.physics_urban || { state: "not_declared" };
   const physU = { state: PHYSU.state, drawn: false, chunks: 0, quads: 0, reason: PHYSU.reason || null,
-                  stats: null, error: null, entities: [] };
+                  stats: null, error: null, prims: [], ring: null, hiddenByExag: false };
+  // The surface is built at x1 and is not scaled with the globe mesh, so while relief is exaggerated
+  // (a legibility view, not evidence) it is hidden rather than left buried or floating.
+  physSync = () => {
+    physU.hiddenByExag = EXAG_K !== 1;
+    for (const pr of physU.prims) pr.show = !physU.hiddenByExag;
+    if (physU.ring) physU.ring.show = !physU.hiddenByExag;
+  };
   const PHYS_STYLE = { top: "#9db4c8", alpha: 1.0, chunkCells: 32, perTick: 6, outline: "#7fd6ff" };
   if (PHYSU.state === "available" && VISUAL.mode === "physics") {
     try {
@@ -1692,7 +1702,7 @@ async function boot() {
       if (!d || d.schema !== PHYS_URBAN_SCHEMA) throw new Error("payload is not " + PHYS_URBAN_SCHEMA);
       const g = physDecode(d);
       physU.stats = physStats(g);
-      const cAt = (i, j, h) => { const [lo, la] = physCorner(g, i, j); return Cesium.Cartesian3.fromDegrees(lo, la, h); };
+      const cAt = (i, j, h) => { const [lo, la] = physCorner(g, i, j); return Cesium.Cartesian3.fromDegrees(lo, la, exagZ(h)); };
       const color = Cesium.Color.fromCssColorString(PHYS_STYLE.top).withAlpha(PHYS_STYLE.alpha);
       const jobs = [];
       for (let j0 = 0; j0 < g.ny; j0 += PHYS_STYLE.chunkCells)
@@ -1723,17 +1733,17 @@ async function boot() {
           indices: idx, primitiveType: Cesium.PrimitiveType.TRIANGLES,
           boundingSphere: Cesium.BoundingSphere.fromVertices(Array.from(pos)),
         });
-        viewer.scene.primitives.add(new Cesium.Primitive({
+        physU.prims.push(viewer.scene.primitives.add(new Cesium.Primitive({
           geometryInstances: new Cesium.GeometryInstance({ geometry,
             attributes: { color: Cesium.ColorGeometryInstanceAttribute.fromColor(color) } }),
           appearance: new Cesium.PerInstanceColorAppearance({ flat: false, translucent: false, closed: false }),
-          asynchronous: false, allowPicking: false,
-        }));
+          asynchronous: false, allowPicking: false, show: !physU.hiddenByExag,
+        })));
         physU.chunks += 1; physU.quads += n;
       };
       // The grid's own edge, so the extent of the surface -- and what lies outside it -- is visible.
       const ring = [[0, 0], [g.nx, 0], [g.nx, g.ny], [0, g.ny], [0, 0]].map(([i, j]) => physCorner(g, i, j));
-      viewer.entities.add({ polyline: { positions: Cesium.Cartesian3.fromDegreesArray(ring.flat()),
+      physU.ring = viewer.entities.add({ polyline: { positions: Cesium.Cartesian3.fromDegreesArray(ring.flat()),
         width: 2, clampToGround: true, material: Cesium.Color.fromCssColorString(PHYS_STYLE.outline).withAlpha(0.8) } });
       let next = 0;
       const tick = () => {
@@ -2153,7 +2163,8 @@ async function boot() {
       : { ...PHYSU, state: physU.state, reason: physU.reason };
     return layerLines({
       visualMode: VISUAL.mode, terrainDrawn: !(prov && prov.active),
-      physUrban: effective, physUrbanDrawn: physU.drawn,
+      physUrban: effective, physUrbanDrawn: physU.drawn && !physU.hiddenByExag,
+      physUrbanHidden: physU.hiddenByExag,
       localText: geo === "local_osm_extrusions"
         ? `${cc.shown} of ${cityTotal} buildings drawn (OSM, ODbL) — not physical`
         : (URBAN ? (city.reason || "none drawn") : null),
@@ -2170,11 +2181,16 @@ async function boot() {
     }));
   };
   renderLayerProv();
-  setInterval(renderLayerProv, 1000);
+  // Re-read the observed state about once a second, on the render loop (no second timer).
+  let layerProvAt = 0;
+  viewer.scene.postRender.addEventListener(() => {
+    const now = pageClockMs();
+    if (now - layerProvAt >= 1000) { layerProvAt = now; renderLayerProv(); }
+  });
   window.NAIGOS_VIEW.layers = () => layerState();
   window.NAIGOS_VIEW.physicsUrban = () => ({
     state: physU.state, reason: physU.reason, drawn: physU.drawn, chunks: physU.chunks,
-    quads: physU.quads, done: !!physU.done, error: physU.error, stats: physU.stats,
+    quads: physU.quads, done: !!physU.done, hidden_by_exaggeration: physU.hiddenByExag, error: physU.error, stats: physU.stats,
     evidence: PHYSU.evidence || null, evidence_grade: PHYSU.evidence_grade === true,
     geometry_source: PHYSU.geometry_source || null });
 
