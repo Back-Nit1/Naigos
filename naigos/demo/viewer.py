@@ -67,6 +67,7 @@ def build(data_path: Path, out_path: Path | None = None, aoi: str | None = None,
     # package, and `--help` should not pay for a compiler it will not use.
     from . import camera as camera_mod
     from . import presentation as presentation_mod
+    from . import physics_urban as phys_mod
     from . import urban as urban_mod
     from .live import render_page, static_payload
 
@@ -87,6 +88,7 @@ def build(data_path: Path, out_path: Path | None = None, aoi: str | None = None,
     except presentation_mod.PresentationError as e:
         raise SystemExit(f"naigos.demo.viewer: {e}")
     urban_status = urban_mod.load(theatre) if theatre else None
+    physics_urban = phys_mod.load(theatre)
     if urban and not (urban_status and urban_status.available):
         raise SystemExit(
             f"--visual urban-presentation embeds the local city layer, and there is none: "
@@ -102,7 +104,8 @@ def build(data_path: Path, out_path: Path | None = None, aoi: str | None = None,
     # the same place in a physics export); the layer itself only in urban mode.
     payload = static_payload(data_path, aoi=aoi, urban_status=urban_status,
                              camera_key=camera_mod.preset_key(camera, urban), embed_urban=urban,
-                             presentation=presentation)
+                             presentation=presentation, physics_urban=physics_urban,
+                             embed_physics_urban=not urban)
     marker = "/*__EMBED__*/null"
     if marker not in html:
         raise SystemExit(f"{ASSETS / 'cesium.html'} has no {marker} substitution point")
@@ -159,6 +162,14 @@ def main(argv=None) -> int:
     if a.visual == imagery_mod.URBAN_MODE:
         print(f"urban: OSM buildings and roads embedded (ODbL, (c) OpenStreetMap contributors). "
               f"PRESENTATION ONLY -- {imagery_mod.BUILDING_LOS_NOTE}")
+    if a.visual == "physics":
+        pu = phys_mod.load(a.aoi or json.loads(src.read_text()).get("theatre"))
+        if pu.available:
+            ev = pu.grid.evidence()
+            print(f"physics urban obstacles: {ev['content_sha256'][:12]} embedded -- the simulation's "
+                  "structure surface (evidence-grade), not presentation buildings")
+        elif pu.state == "unavailable":
+            print(f"physics urban obstacles UNAVAILABLE: {pu.reason}")
     print("imagery: OpenStreetMap, keyless. No credential is written into the artifact.")
     if a.ambience != "off":
         print(f"ambience: conflict_ambience ({a.ambience_setting}, visual seed {a.visual_seed}) "

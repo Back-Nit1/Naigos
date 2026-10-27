@@ -84,6 +84,7 @@ from . import cities as cities_mod
 from . import presentation as presentation_mod
 from . import atmosphere as atmosphere_mod
 from . import scenario as scenario_mod
+from . import physics_urban as phys_mod
 
 ASSETS = Path(__file__).parent / "assets"
 
@@ -1110,7 +1111,7 @@ def replay_scene(d: dict, georef: GeoRef, terrain_meta: dict, dt_s: float,
 
 def static_payload(path: Path, aoi: str | None = None, urban_status=None,
                    camera_key: str | None = None, embed_urban: bool = False,
-                   presentation=None) -> dict:
+                   presentation=None, physics_urban=None, embed_physics_urban: bool = False) -> dict:
     """Everything `cesium.html` fetches, for a page that will fetch nothing.
 
     Keyed by the route it stands in for, so the static artifact and the served
@@ -1149,6 +1150,9 @@ def static_payload(path: Path, aoi: str | None = None, urban_status=None,
     else:
         scene.update(presentation_mod.resolve(rp.get("theatre"), "physics",
                                               checkpoint=d.get("checkpoint")).scene_fields())
+    physics_urban = physics_urban or phys_mod.PhysicsUrban("not_declared")
+    scene["physics_urban"] = {**physics_urban.scene_block(),
+                              "drawn_in_this_mode": bool(embed_physics_urban and physics_urban.available)}
     out = {
         "/scene": scene,
         "/frames": {k: v for k, v in rp.items() if not k.startswith("_")},
@@ -1158,6 +1162,10 @@ def static_payload(path: Path, aoi: str | None = None, urban_status=None,
     # it without a single request for data.
     if embed_urban and urban_status is not None and urban_status.available:
         out["/urban"] = urban_mod.page_payload(urban_status)
+    # The evidence-grade export carries the physics obstacle surface; a presentation export
+    # carries only its status, so the two kinds of urban geometry stay distinguishable on disk.
+    if embed_physics_urban and physics_urban.available:
+        out["/physics_urban"] = physics_urban.page_payload()
     return out
 
 
@@ -1209,7 +1217,7 @@ def make_handler(sim: Simulation, notes: dict, ion_token: str | None,
                  replay: dict | None = None, visual=None,
                  google_api_key: str | None = None,
                  urban_status=None, camera_key: str | None = None,
-                 presentation=None):
+                 presentation=None, physics_urban=None):
     """Build the request handler, baking the token and the visual config into the page.
 
     The page is rendered once, here, by `render_page` -- which owns every
@@ -1229,6 +1237,13 @@ def make_handler(sim: Simulation, notes: dict, ion_token: str | None,
         page = urban_mod.page_payload(urban_status)
         if page is not None:
             urban_body = json.dumps(page, separators=(",", ":")).encode()
+    # The physics-grade obstacle surface is served only to the evidence-grade page that draws
+    # it; every other mode gets the status in /scene (so its HUD can say what is NOT drawn)
+    # and a 404 here, so presentation pages never hold the bytes.
+    physics_urban = physics_urban or phys_mod.PhysicsUrban("not_declared")
+    phys_body = None
+    if visual.mode == imagery_mod.DEFAULT_VISUAL_MODE and physics_urban.available:
+        phys_body = json.dumps(physics_urban.page_payload(), separators=(",", ":")).encode()
     view_cache: dict = {}
 
     def terrain_pair():
@@ -1261,6 +1276,8 @@ def make_handler(sim: Simulation, notes: dict, ion_token: str | None,
                 # The viewer states what it is showing, and whether that is
                 # evidence. Credential-free: see VisualConfig.
                 sc["visual"] = visual.as_dict()
+                sc["physics_urban"] = {**physics_urban.scene_block(),
+                                       "drawn_in_this_mode": phys_body is not None}
                 if replay is not None:
                     sc["mode"] = "replay"
                     sc["policies"] = replay["policies"]
@@ -1286,6 +1303,10 @@ def make_handler(sim: Simulation, notes: dict, ion_token: str | None,
                 if urban_body is None:
                     return self.send_error(404, "no local urban layer in this visual mode")
                 return self._send(urban_body, "application/json")
+            if self.path == "/physics_urban":
+                if phys_body is None:
+                    return self.send_error(404, "no physics urban obstacles in this visual mode")
+                return self._send(phys_body, "application/json")
             if self.path == "/frames":
                 if replay is None:
                     return self.send_error(404, "not running in replay mode")
@@ -1329,7 +1350,8 @@ def make_handler(sim: Simulation, notes: dict, ion_token: str | None,
 
 def smoke_report(visual, notes: dict, terrain_meta: dict, replay_path: str | None = None,
                  urban_status=None, camera_key: str | None = None,
-                 terrain_bytes: bytes | None = None, presentation=None) -> dict:
+                 terrain_bytes: bytes | None = None, presentation=None,
+                 physics_urban=None) -> dict:
     """What the viewer WOULD draw, resolved without a browser. Diagnostic only.
 
     Everything here is decided before the first pixel: which surface, which
@@ -1389,6 +1411,8 @@ def smoke_report(visual, notes: dict, terrain_meta: dict, replay_path: str | Non
         "cached_road_count": counts.get("roads", 0),
         "render_only_building_occlusion": visual.building_occlusion_default,
         "building_note": visual.building_note,
+        # --- the four kinds of surface, said separately --------------------------
+        "layers": _layer_report(visual, physics_urban, urban_summary),
         # --- the city standard: presentation, framing, exclusions ---------------
         "evidence_state": ("evidence-grade: the drawn surface is the simulation DEM and nothing "
                            "presentation-only is drawn" if visual.evidence_grade else
@@ -1396,6 +1420,26 @@ def smoke_report(visual, notes: dict, terrain_meta: dict, replay_path: str | Non
         "camera_presets_available": cam.get("available"),
         **({"presentation": presentation.summary()} if presentation is not None else {}),
         "protected_zones": _zone_report(notes.get("theatre"), cam, urban_summary, presentation),
+    }
+
+
+def _layer_report(visual, physics_urban, urban_summary: dict) -> dict:
+    """Physics terrain / physics urban obstacles / local presentation / provider presentation."""
+    pu = (physics_urban or phys_mod.PhysicsUrban("not_declared")).scene_block()
+    drawn_physics = visual.mode == imagery_mod.DEFAULT_VISUAL_MODE
+    provider = visual.geometry_source == imagery_mod.GEOMETRY_PROVIDER
+    return {
+        "physics_terrain": {"drawn": visual.terrain_source == imagery_mod.TERRAIN_SOURCE_SIMULATION,
+                            "evidence_grade": True, "source": "the simulation's DEM"},
+        "physics_urban_obstacles": {"state": pu["state"], "evidence_grade": pu["evidence_grade"],
+                                    "drawn": drawn_physics and pu["state"] == "available",
+                                    "reason": pu.get("reason"), "evidence": pu.get("evidence")},
+        "presentation_local_buildings": {
+            "evidence_grade": False, "state": urban_summary.get("state") if urban_summary else None,
+            "drawn": visual.mode == imagery_mod.URBAN_MODE and not provider
+            and (urban_summary or {}).get("state") == "available"},
+        "presentation_provider_buildings": {"evidence_grade": False, "requested": provider,
+                                            "readiness": visual.provider_state},
     }
 
 
@@ -1515,6 +1559,9 @@ def main(argv=None) -> int:
     # missing cache is a labelled state, not an error -- starting the server
     # must not depend on the network.
     urban_status = urban_mod.load(a.aoi)
+    # The evidence-grade structure surface, if this theatre declares one. A missing or corrupt
+    # artifact is reported as such -- never replaced by the presentation layer above.
+    physics_urban = phys_mod.load(a.aoi)
 
     from ..env.theatre_bridge import describe, env_from_theatre
     from ..rl.red_team import RedCurriculum
@@ -1542,7 +1589,8 @@ def main(argv=None) -> int:
             tb, meta = build_terrain_grid(np.asarray(hmap), cfg.terrain, GeoRef(**notes["georef"]),
                                           notes["geo_bounds"])
         print(json.dumps(smoke_report(visual, notes, meta, a.replay, urban_status, camera_key, tb,
-                                      presentation=presentation), indent=2))
+                                      presentation=presentation, physics_urban=physics_urban),
+                         indent=2))
         return 0
     cfg = RedCurriculum().apply(cfg, a.red_level)
     print(describe(notes))
@@ -1599,7 +1647,8 @@ def main(argv=None) -> int:
         ("127.0.0.1", a.port),
         make_handler(sim, notes, ion_token, replay, visual=visual,
                      google_api_key=google_api_key, urban_status=urban_status,
-                     camera_key=camera_key, presentation=presentation),
+                     camera_key=camera_key, presentation=presentation,
+                     physics_urban=physics_urban),
     )
     url = f"http://127.0.0.1:{a.port}/"
     mode = "replay" if replay else f"live, {a.speed:g}x real time"
@@ -1634,6 +1683,15 @@ def main(argv=None) -> int:
             print(f"urban: {urban_status.reason}")
         print(f"urban: {imagery_mod.BUILDING_LOS_NOTE} Render-only building occlusion "
               "starts OFF.")
+    if physics_urban.available:
+        ev = physics_urban.grid.evidence()
+        print(f"physics urban obstacles: {ev['content_sha256'][:12]} -- {ev['nx']}x{ev['ny']} @ "
+              f"{ev['cell_m']:g} m, {ev['coverage_fraction']:.1%} covered; "
+              + ("drawn (evidence-grade, the simulation's structure surface)"
+                 if visual.mode == imagery_mod.DEFAULT_VISUAL_MODE
+                 else "not drawn in this mode; presentation geometry is NOT physical"))
+    elif physics_urban.state == "unavailable":
+        print(f"physics urban obstacles UNAVAILABLE: {physics_urban.reason}")
     print(f"camera: {camera_key}")
     print(f"scenario: {presentation.scenario['label']}")
     print(presentation.scenario["checkpoint"]["text"])
