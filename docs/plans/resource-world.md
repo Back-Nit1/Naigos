@@ -1,7 +1,26 @@
 # Resource world: a model ladder for constrained autonomous routing
 
-Status: **design only**. No environment, policy, checkpoint, or training code is
-changed by this document.
+Status: **L1 endurance and the vehicle-weather/urban-mission increments are
+implemented; sensing, communications and uncertain-map increments remain
+proposed.** Historical audit text below is retained as the pre-implementation
+baseline and is superseded where the implementation amendment says so.
+
+## Implementation amendment (2026-10-27)
+
+The following cumulative identities now exist without changing the default:
+
+- `baseline-v0`: historical behavior and shipped checkpoint contract;
+- `resource-world-v1/endurance`: binding fuel, reserve and diversion;
+- `resource-world-v1/vehicle-weather`: wind-relative motion, density-scaled
+  authority/burn and deterministic bounded AR(1) gusts;
+- `resource-world-v1/urban-vehicle-weather`: validated raster obstacle collision
+  and LOS, mechanical-wake surrogate and fixed-shape anonymous missions.
+
+The older “does not exist” entries in the audit describe the state from which
+the ladder was designed. Current details and limitations are in
+[urban-weather-missions](../urban-weather-missions.md). In particular, sensing
+and communications are not silently claimed by the later weather identity;
+they remain independent proposed rungs.
 
 The objective is to turn Naigos from a route-through-threats task into a
 resource-management task without weakening its existing evidence. The current
@@ -95,10 +114,11 @@ ablations so a compound failure does not hide which mechanism mattered.
 | --- | --- | --- | --- |
 | L0 | `baseline-v0` | Current environment exactly as shipped. | Preserve the working controller, shipped checkpoint, published numbers, and all current regression tests. |
 | L1 | `resource-world-v1/endurance` | Binding fuel/endurance, reserve margins, two recovery gates, primary-versus-divert outcomes. | Minimum viable genuine resource-routing problem. |
-| L2 | `resource-world-v1/sensing` | L1 plus noisy blue measurements, confidence, dropout, track aging, and stale-track propagation. | Make information quality a time-dependent resource without changing red truth. |
-| L3 | `resource-world-v1/coordination` | L2 plus lossy/delayed friendly packets and simulated decision deadlines. | Test robust decentralized coordination and control persistence. |
-| L4 | `resource-world-v1/vehicle-weather` | L3 plus reduced actuator authority, wind/gusts, density effects, and sensing attenuation. | Couple route, energy, controllability, and environment. |
-| L5 | `resource-world-v1/uncertain-map-cbf` | L4 plus onboard terrain uncertainty and a resource-aware CBF. | Measure safety-backstop value when its information and authority are not oracles. |
+| L2 | `resource-world-v1/sensing` (**proposed**) | L1 plus noisy blue measurements, confidence, dropout, track aging, and stale-track propagation. | Make information quality a time-dependent resource without changing red truth. |
+| L3 | `resource-world-v1/coordination` (**proposed**) | L2 plus lossy/delayed friendly packets and simulated decision deadlines. | Test robust decentralized coordination and control persistence. |
+| L4 | `resource-world-v1/vehicle-weather` (**implemented independently of proposed L2/L3**) | L1 plus wind/gusts, density-scaled authority/burn and local weather observations. | Couple route, energy, controllability, and environment. |
+| L4U | `resource-world-v1/urban-vehicle-weather` (**implemented**) | L4 plus evidence-grade urban collision/LOS, wake surrogate and opt-in missions. | Test mission and recovery under weather and urban constraints. |
+| L5 | `resource-world-v1/uncertain-map-cbf` (**proposed**) | L4U plus onboard terrain uncertainty. | Measure safety-backstop value when its information and authority are not oracles. |
 
 Do not train only L5 and compare it with L0. The ladder is the experiment:
 every rung gets the same policy classes, route splits, scenario accounting, and

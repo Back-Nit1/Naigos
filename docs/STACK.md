@@ -46,6 +46,10 @@ naigos/rl/train.py -> modal_train.py           naigos/demo/replay.py -> demo.jso
 | cloud learning pipeline | `naigos/pipeline/`, `naigos/rl/modal_pipeline.py`, `scripts/pipeline.py` | core (stdlib); Modal to deploy | `pytest tests/test_pipeline_*.py tests/test_research_roots.py` |
 | trajectory datasets | `naigos/trajectory/` | core (NumPy; no JAX) | `pytest tests/test_trajectory_data.py` |
 | trajectory recording | `naigos/rl/trajectory_recording.py` | `rl` | `pytest tests/test_trajectory_recording.py` |
+| weather + missions | `naigos/env/weather.py`, `mission.py`, `scenario_bank.py` | core | `pytest tests/test_weather_physics.py tests/test_missions.py tests/test_city_scenario_bank.py` |
+| urban physics consumer | `naigos/env/urban.py` | core | `pytest tests/test_urban_physics_env.py tests/test_physics_los.py` |
+| independent physics evidence | `naigos/rl/physics_verifier.py` | core (NumPy only) | `pytest tests/test_physics_verifier.py tests/test_physics_mission_verifier.py` |
+| optional 6-DoF boundary | `naigos/validation/sixdof.py` | optional external validator | `pytest tests/test_sixdof_validation.py` |
 
 `.github/workflows/ci.yml` runs the whole table above on every push and PR --
 Python 3.12, `uv sync --all-extras --frozen`, `pytest -q` -- so "verify with"
@@ -68,15 +72,27 @@ The default `deepsets@1` factory returns `networks.Actor(cfg)` itself, so curren
 parameter trees, the checkpoint's top-level `actor` key, and direct imports of
 `networks.Actor` are unchanged. `networks.Critic` is deliberately absent from
 the factory: it consumes centralized inputs during training and is not a
-deployment dependency. Recurrent, numeric-transformer and scripted family names
-are reserved but unregistered; asking for one fails rather than falling back.
+deployment dependency. `gru@1` is implemented with explicit hidden-state reset,
+rollout, checkpoint and trajectory contracts. Numeric-transformer names remain
+unregistered and fail closed rather than falling back. Policy family/version is
+threaded through run metadata, checkpoints, PPO and replay; absent historical
+fields still mean `deepsets@1`.
 
-PPO still constructs `networks.Actor` and `networks.Critic` directly. Before a
-second learned family is implemented, thread family/version through run metadata
-and checkpoints (treating absent fields as `deepsets@1`), then teach PPO rollout
-and loss collection to carry the selected actor's explicit memory state. That is
-the integration point; it is intentionally not hidden inside the current
-checkpoint schema or training loop.
+**Weather, missions and urban physics.** These are opt-in environment rungs;
+`baseline-v0` remains the default. `resource-world-v1/vehicle-weather` adds
+wind-relative motion, density and a bounded correlated gust model.
+`resource-world-v1/urban-vehicle-weather` additionally requires a validated
+`naigos.urban_obstacles/1` artifact and uses it for swept collision, LOS and a
+documented mechanical-wake surrogate. Anonymous fixed-shape missions support
+transit, multi-leg, dwell, survey and recovery. Actor inputs are local; complete
+profiles, future stages and exact gusts remain privileged evidence. See
+[urban-weather-missions](urban-weather-missions.md).
+
+**6-DoF boundary.** The trainer remains the fast JAX model. The optional
+validation seam canonicalizes deterministic maneuver scenarios and refuses a
+JSBSim run unless version 1.2.3 and a hash-pinned aircraft manifest are present.
+No nonlinear aircraft model ships with the repository, so that adapter is
+currently unavailable/fail-closed; the test fixture is explicitly not 6-DoF.
 
 **Verifier.** Pure NumPy, shares no code with the env. It verifies a logged trace;
 it does not re-simulate. A verifier that reuses the env's functions cannot catch a
@@ -97,6 +113,12 @@ and normalization; bounded chunks carry arrays plus per-chunk hashes; a final
 manifest is written last and is the only completion marker. The fixed action
 components remain bank, flight-path angle and throttle. The complete contract
 and extension rules are in `docs/TRAJECTORY_DATA.md`.
+
+Physics trajectories append versioned weather, mission, urban and CBF evidence
+without reinterpreting the core fields. Checkpoint schema 6 pins their config
+and artifact digests, aircraft model, named-stream version and code state;
+resume rejects mismatches. The historical checkpoint remains readable as
+`baseline-v0`.
 
 **Theatres.** An AOI is built-in (`naigos/research/aoi.py`) or file-defined
 (`naigos/research/aois/<aoi>.json`, discovered at import). A file-defined AOI

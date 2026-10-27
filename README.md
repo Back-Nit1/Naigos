@@ -78,6 +78,7 @@ None of it has produced a published number yet.
 | v2 training protocol (multi-seed, provenance, report) | Phase 1 implemented; Phases 2-4 are design | [spec](docs/superpowers/specs/2026-10-09-v2-training-protocol-phase1-design.md), `scripts/run_protocol_v2.py` |
 | Model ladder: DeepSets v1 (shipped) and DeepSets + GRU-128 | both buildable and checkpointable via `naigos.rl.policies`; GRU has no trained result. Transformer and language planner are plans only | [model-ladder](docs/plans/model-ladder.md), `scripts/model_ladder.py` |
 | Resource world (`baseline-v0` default, `resource-world-v1/endurance` opt-in): fuel, diversion gates, exclusive L1 outcomes, a frozen resource bank and an L1 trace verifier | implemented and tested; baseline behaviour unchanged | [resource-world](docs/plans/resource-world.md), `naigos/env/resource*.py` |
+| Vehicle weather, urban physics and missions (`resource-world-v1/vehicle-weather`, `resource-world-v1/urban-vehicle-weather`) | implemented and opt-in; fast JAX model plus independent NumPy evidence; nonlinear 6-DoF adapter currently fail-closed | [architecture](docs/urban-weather-missions.md), `naigos/env/weather.py`, `naigos/env/urban.py`, `naigos/env/mission.py` |
 | Experiment matrices over policy x theatre x seed x resource preset | planner is inert (no Modal, no credentials); unsupported cells are refused before any job | [model-ladder-matrix](docs/model-ladder-matrix.md) |
 | Trajectory collection (opt-in, off by default) | recorders wired into PPO, evaluators, route/resource banks, pipeline and replay. **Nothing consumes the data**: no behaviour cloning, offline RL or LM training has been done | [TRAJECTORY_DATA](docs/TRAJECTORY_DATA.md), `naigos/trajectory/` |
 | Modal GPU training and scheduled pipeline | audited and fixed locally; **no GPU run yet** | [modal-readiness](docs/plans/modal-readiness.md) |
@@ -695,6 +696,9 @@ uv run python scripts/train_theatre.py --iterations 1000 --envs 64 --steps 128
 
 # with the safety backstop active during evaluation
 uv run python scripts/train_theatre.py --iterations 1000 --cbf
+
+# frozen notional city stress case; no live weather request
+uv run python scripts/train_theatre.py --aoi nyc_harbor --city-scenario harbor_crosswind --iterations 1
 ```
 
 Checkpoints and `history.json` land in `runs/<name>/`. The committed result came
@@ -989,6 +993,8 @@ reuse the wrong terrain.
 | CBF backstop | Implemented and wired behind `--cbf`. On the committed held-out artifact it removes trained-policy terrain losses (15 → 0), but costs objective rate (0.672 → 0.240). QP infeasibility (0.227) is reported, not hidden. |
 | Recurrent actor (GRU-128) | Implemented and checkpoint-tested, including hidden-state reset on world reroll in the live demo. **Untrained**: no result in this repo comes from it. |
 | Resource world | `baseline-v0` is the default and leaves the shipped checkpoint's pytree contract unchanged (tested). `resource-world-v1/endurance` is opt-in; its envelopes are initial experiment ranges, not calibrated facts. |
+| Vehicle weather + urban missions | Opt-in deterministic engineering simulation. Gusts are a bounded AR(1) surrogate, obstacle wake is not CFD, and anonymous missions are procedural. The physics obstacle artifact is separate from visual buildings. No learned performance result is claimed. |
+| 6-DoF validation | Deterministic interface and maneuver fixtures are implemented. A real nonlinear run is unavailable/fail-closed until JSBSim 1.2.3 and a hash-pinned generic aircraft model are supplied offline. The fast trainer is not called 6-DoF. |
 | Trajectory data | Format and recorders are real and tested; recording is off by default and nothing downstream trains on it. |
 | Learned red / self-play | **Not implemented.** `LearnedRedStub` raises rather than falling back. |
 
