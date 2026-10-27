@@ -700,7 +700,7 @@ def run(
 
     blob = ckpt.load(resume_from) if resume_from is not None else None
     if blob is not None:
-        ckpt.require_environment_compatible(blob, env_cfg, resume_from)
+        ckpt.require_resume_compatible(blob, env_cfg, ppo_cfg, policy_spec, resume_from)
         rec = blob["recovery"]
         # Restore the curriculum state BEFORE building the env, because the env
         # is a function of the red level and the reward weights are a function

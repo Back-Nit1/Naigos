@@ -21,7 +21,12 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
 
-from naigos.env.config import EnvConfig  # noqa: E402
+from naigos.env.config import (  # noqa: E402
+    RESOURCE_WORLD_BASELINE,
+    RESOURCE_WORLD_MODELS,
+    EnvConfig,
+    ResourceWorldConfig,
+)
 from naigos.env.theatre_bridge import env_from_theatre  # noqa: E402
 from naigos.env.flight_env import NaigosEnv  # noqa: E402
 from naigos.rl import checkpoint as ckpt  # noqa: E402
@@ -49,7 +54,7 @@ def theatre_env(aoi: str, *, red_level: float | None = None, **flags):
 
 
 def train_multi(out, *, seed, iterations, block, aois=THEATRES, make_env=theatre_env, ppo=None,
-                plateau=PlateauConfig(), eval_every=20, eval_worlds=64, checkpoint_every=100):
+                plateau=PlateauConfig(), eval_every=20, eval_worlds=64, checkpoint_every=100, resource=None):
     """One policy over several theatres: the AOI rotates every `block` iterations.
 
     Each block is one `run()` call that resumes the previous block's checkpoint,
@@ -115,6 +120,8 @@ def train_multi(out, *, seed, iterations, block, aois=THEATRES, make_env=theatre
         k = done // block
         aoi, target = aois[k % len(aois)], min((k + 1) * block, iterations)
         cfg, hmap = make_env(aoi)
+        if resource is not None:
+            cfg = cfg.replace(resource=resource)
         _, hist = run(cfg, ppo, TrainConfig(iterations=target, out_dir=str(out), seed=seed, eval_every=eval_every,
                                             eval_worlds=eval_worlds, checkpoint_every=checkpoint_every,
                                             route_eval=True, route_eval_context={"aoi": aoi}, plateau=plateau),
@@ -170,7 +177,8 @@ def build_report(plan: dict, runs_root, out_dir, *, make_env=theatre_env, eval_r
         blob = ckpt.load(final)
         stored = blob["env_cfg"]  # a checkpoint from before a flag existed was trained without it
         flags = {"route_mode": stored.get("route_mode", "legacy"), "map_randomize": bool(stored.get("map_randomize")),
-                 "obs_edge_features": bool(stored.get("obs_edge_features"))}
+                 "obs_edge_features": bool(stored.get("obs_edge_features")),
+                 "resource": ckpt.resource_config_from_blob(blob)}
         train = p2.MULTI if r["kind"] == "multi" else r["theatres"][0]
         for ev in plan["eval_theatres"]:
             cfg, hmap = make_env(ev, red_level=eval_red_level, **flags)
@@ -227,6 +235,9 @@ def main(argv=None) -> int:
     tm.add_argument("--iterations", type=int, default=3000)
     tm.add_argument("--block", type=int, default=50)
     tm.add_argument("--out", required=True)
+    tm.add_argument("--policy-family", default="deepsets", choices=("deepsets", "recurrent"))
+    tm.add_argument("--recurrent-seq-len", type=int, default=PPOConfig.recurrent_seq_len)
+    tm.add_argument("--resource", default=RESOURCE_WORLD_BASELINE, choices=RESOURCE_WORLD_MODELS)
     rp = sub.add_parser("report", help="evaluate finished runs and write the gated report")
     rp.add_argument("--plan", required=True)
     rp.add_argument("--runs", required=True)
@@ -244,7 +255,9 @@ def main(argv=None) -> int:
             print(" ".join(r["command"]))
         print(f"\n{len(plan['runs'])} runs, plan_sha256 {plan['plan_sha256'][:16]} -> {a.out}", file=sys.stderr)
     elif a.cmd == "train-multi":
-        train_multi(a.out, seed=a.seed, iterations=a.iterations, block=a.block)
+        train_multi(a.out, seed=a.seed, iterations=a.iterations, block=a.block,
+                    ppo=PPOConfig(policy_family=a.policy_family, recurrent_seq_len=a.recurrent_seq_len),
+                    resource=ResourceWorldConfig(model=a.resource))
     else:
         m = build_report(json.loads(Path(a.plan).read_text()), a.runs, a.out,
                          eval_red_level=a.eval_red_level, allow_unverified=a.allow_unverified)

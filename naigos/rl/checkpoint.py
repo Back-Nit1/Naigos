@@ -613,6 +613,33 @@ def require_environment_compatible(blob: dict, cfg, source) -> None:
         )
     if cfg.resource.enabled and dataclasses.asdict(resource_config_from_blob(blob)) != dataclasses.asdict(cfg.resource):
         raise CheckpointError(f"{source}: checkpoint resource_config differs from the requested L1 environment")
+    if cfg.resource.enabled:
+        saved_bank = (blob.get("resource_bank") or {}).get("sha256")
+        want_bank = _resource_bank_record()["sha256"]
+        if saved_bank != want_bank:
+            raise CheckpointError(
+                f"{source}: checkpoint resource bank digest {saved_bank!r} differs from this "
+                f"code's {want_bank!r}; the frozen L1 bank changed, resume is refused"
+            )
+
+
+def require_resume_compatible(blob: dict, cfg, ppo_cfg, policy_spec, source) -> None:
+    """Every identity a resumed run must share with its checkpoint, checked up front.
+
+    Resource identity (model, observation schema, config, bank digest) and policy
+    identity (family, version, spec) are independent axes; each is validated on
+    its own so the error names the axis that moved. A recurrent checkpoint also
+    pins its truncated-BPTT sequence length, which changes the update.
+    """
+    require_environment_compatible(blob, cfg, source)
+    assert_policy_compatible(blob, policy_spec)
+    if policy_spec.memory_requirements.recurrent:
+        saved = (blob.get("recovery") or {}).get("ppo", {}).get("recurrent_seq_len")
+        if saved is None or int(saved) != int(ppo_cfg.recurrent_seq_len):
+            raise CheckpointError(
+                f"{source}: checkpoint recurrent_seq_len is {saved!r}, but this run requested "
+                f"{ppo_cfg.recurrent_seq_len}"
+            )
 
 
 def require_actor_ego_dim(actor_params, cfg, source) -> None:

@@ -473,6 +473,9 @@ def env_config_from_blob(blob: dict, **overrides) -> EnvConfig:
 
     top = {f.name for f in dataclasses.fields(EnvConfig)}
     kw.update({k: v for k, v in stored.items() if k in top})
+    # Checkpoint metadata, not the stored dict, is the resource authority: it
+    # restores tuple fields and refuses a model/config disagreement.
+    kw["resource"] = ckpt_mod.resource_config_from_blob(blob)
     kw.update(overrides)
     return EnvConfig(**kw)
 

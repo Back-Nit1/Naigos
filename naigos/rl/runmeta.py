@@ -1162,6 +1162,12 @@ RESUME_BLOCKING_KEYS = (
     "config.policy_family",
     "config.policy_version",
     "config.recurrent_seq_len",
+    # Resource-world identity is orthogonal to the policy family: any cell of
+    # the policy x resource cross-product is a distinct, non-resumable contract.
+    "config.environment_model_id",
+    "config.observation_schema_id",
+    "config.resource_config",
+    "config.resource_bank",
     # Not a `run.json` field: the curricula live in code, so only a code change
     # can move them. Named here so it is a legal `--override-resume` key and so
     # `naigos.rl.checkpoint` and this module share one vocabulary.
@@ -1172,6 +1178,8 @@ _LEGACY_POLICY_DEFAULTS = {
     "config.policy_family": "deepsets",
     "config.policy_version": "1",
     "config.recurrent_seq_len": 32,
+    "config.environment_model_id": "baseline-v0",
+    "config.observation_schema_id": "Observation-v0",
 }
 
 
