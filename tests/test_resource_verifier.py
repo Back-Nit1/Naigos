@@ -14,7 +14,9 @@ from naigos.env.config import (
     TerrainConfig,
 )
 from naigos.env.flight_env import NaigosEnv
+from naigos.env.resource_bank import config_for_scenario, resource_bank
 from naigos.rl import verifier
+from naigos.rl.train import make_reserve_divert_policy
 
 
 CFG = EnvConfig(
@@ -88,6 +90,31 @@ def test_resource_verifier_rejects_tampered_outcome_and_observation():
     assert not report.ok
     assert any("outcome label" in message for message in report.mismatches)
     assert any("observation mismatch" in message for message in report.mismatches)
+
+
+def test_resource_verifier_checks_first_diversion_crossing():
+    row = next(
+        item for item in resource_bank("train_reference")
+        if item.combination == "marginal_fuel"
+    )
+    cfg = config_for_scenario(
+        CFG.replace(max_steps=200), row
+    )
+    env = NaigosEnv(cfg)
+    route = jnp.array([jnp.deg2rad(row.bearing_deg), row.family_id])
+    _final, traj = env.rollout(
+        jax.random.PRNGKey(row.seed), make_reserve_divert_policy(cfg), route=route
+    )
+    trace = {name: np.asarray(value) for name, value in traj.items() if name != "terms"}
+    trace["terms"] = type(traj["terms"])(*[np.asarray(x) for x in traj["terms"]])
+    report = verifier.verify_resource_trace(cfg, trace)
+    assert report.ok, report.mismatches
+    assert report.diversions == 1
+
+    bad = {**trace, "terms": trace["terms"]._replace(diverted=np.zeros_like(trace["terms"].diverted))}
+    tampered = verifier.verify_resource_trace(cfg, bad)
+    assert not tampered.ok
+    assert any("diversion" in message for message in tampered.mismatches)
 
 
 def test_resource_verifier_does_not_import_jax_resource_implementation():

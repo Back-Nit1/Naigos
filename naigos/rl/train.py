@@ -176,11 +176,17 @@ def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
     terminal = np.asarray(final.reached) | diverted | ~np.asarray(final.alive)
     final_fuel = np.asarray(final.air.fuel)
     reserve = np.asarray(final.resource.reserve_fuel)
+    resource_enabled = bool(np.asarray(final.resource.diversion_active).any())
+    recovered = np.asarray(final.reached) | diverted
+    # L0's historical definition remains bit-for-bit. In L1 a live timeout is
+    # not counted as equivalent to reaching either a primary or safe recovery.
+    survived = (np.asarray(final.alive) & recovered) if resource_enabled else np.asarray(final.alive)
     return {
-        "survival_rate": float(final.alive.mean()),
+        "survival_rate": float(survived.mean()),
+        "recovery_rate": float(recovered.mean()),
         "objective_rate": float(final.reached.mean()),
         "diversion_rate": float(diverted.mean()),
-        "fuel_loss_rate": float(fuel_loss.sum() / (n_worlds * n_blue)),
+        "fuel_loss_rate": float((fuel_loss.max(axis=1) > 0).sum() / (n_worlds * n_blue)),
         "mean_terminal_reserve": float(
             np.where(terminal, final_fuel - reserve, 0.0).sum() / max(terminal.sum(), 1)
         ),
