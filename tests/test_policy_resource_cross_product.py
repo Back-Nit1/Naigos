@@ -341,3 +341,26 @@ def test_baseline_recurrent_rollout_trace_matches_feedforward_trace_keys():
     _, t_ff = env.rollout(key, ff, n_steps=3)
     _, t_rec = env.rollout(key, rec, n_steps=3)
     assert set(t_ff) == set(t_rec)
+
+
+# --- demo / replay / CBF -----------------------------------------------------
+
+
+def test_demo_replay_and_cbf_run_every_cell_and_serialise_resource_fields(cell, tmp_path):
+    from naigos.demo import replay
+
+    blob = ck.load(cell["first"])
+    cfg = _env_cfg(ResourceWorldConfig()).replace(**ck.obs_config_from_blob(blob))
+    env = NaigosEnv(cfg)
+    ident = ck.policy_identity(blob)
+    results = replay.run(
+        env, blob["actor"], 2, 0, use_cbf=True,
+        policy_family=ident["family"], policy_version=ident["version"],
+    )
+    traj = results["trained"]["traj"]
+    for name in TRACE_RESOURCE_FIELDS:
+        assert name in traj
+    assert np.isfinite(np.asarray(traj["pos"])).all()
+    path = tmp_path / "demo.json"
+    replay.to_json(results, cfg, path, env=env, world=0)
+    assert path.exists()
