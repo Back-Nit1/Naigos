@@ -1,0 +1,96 @@
+{
+  "id": "data.terrain_dem",
+  "role": "Elevation grid backing radar line-of-sight masking and terrain-following flight.",
+  "inputs": [
+    "AOI bounds"
+  ],
+  "outputs": [
+    "north-up UTM elevation grid (GeoTIFF + npz)",
+    "LOS clearance queries"
+  ],
+  "decision": "Pull 3DEP at 30 m, reproject once to the AOI's UTM zone, clip to the AOI envelope, and expose LOS as a continuous clearance margin rather than a boolean.",
+  "rationale": "3DEP is public domain and seamless over the AOI. Reprojecting once at ingest keeps slant range a plain Euclidean distance in the env's inner loop. LOS returns a signed clearance in metres because a hard 0/1 mask gives the policy no gradient to climb or descend along -- the sign is the constraint, the magnitude is the learning signal.",
+  "parameters": {
+    "resolution_m": 30,
+    "crs": "EPSG:32611",
+    "grid_shape": [
+      1874,
+      1933
+    ],
+    "extent_km": [
+      57.99,
+      56.22
+    ],
+    "origin_easting_m": 350013.77,
+    "origin_northing_m": 3796622.97
+  },
+  "evidence": {
+    "elevation_m": {
+      "min": -2.2,
+      "max": 1873.0,
+      "mean": 220.7,
+      "p05": 0.0,
+      "p95": 1021.7,
+      "relief": 1875.3
+    },
+    "slope_deg": {
+      "mean": 6.37,
+      "p95": 32.22,
+      "max": 72.96
+    },
+    "masking": {
+      "sensor_easting_m": 398838.8,
+      "sensor_northing_m": 3789648.0,
+      "sensor_elevation_m": 1883.0,
+      "masked_fraction_by_height_above_ground": {
+        "100m_agl": 0.122,
+        "300m_agl": 0.053,
+        "1000m_agl": 0.0,
+        "3000m_agl": 0.0
+      },
+      "method": "True per-ray LOS from the AOI high point over 1500 random points, 4/3-Earth effective radius, 15 m ray sampling. See naigos.data.terrain.masked_fraction."
+    }
+  },
+  "invariants": [
+    "Grid is north-up and unrotated; rotated rasters are rejected at load.",
+    "No-data is treated as 'no terrain evidence' (non-blocking), never as cover."
+  ],
+  "caveats": [
+    "3DEP is bare-earth: vegetation and structures are absent, so masking is a floor, not a ceiling.",
+    "CONUS-only. A non-US AOI must switch to the Copernicus GLO-30 fallback."
+  ],
+  "license": "Public domain (US Government work, USGS)",
+  "sources": [
+    {
+      "key": "usgs_3dep",
+      "name": "USGS 3D Elevation Program (3DEP)",
+      "license": "Public domain (US Government work, USGS)",
+      "license_url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits",
+      "citation": "U.S. Geological Survey, 3D Elevation Program (3DEP) 1/3 arc-second Digital Elevation Model. USGS National Map 3DEP Dynamic Service.",
+      "docs": [
+        "https://www.usgs.gov/3d-elevation-program"
+      ],
+      "attribution_required": false,
+      "notes": "CONUS coverage only. Non-US areas of interest must fall back to Copernicus GLO-30."
+    }
+  ],
+  "cached_artifacts": [
+    {
+      "key": "dem/los_angeles_basin/30m/89ce98e489",
+      "path": "terrain/los_angeles_basin_89ce98e489_dem_30m_utm.tif",
+      "bytes": 11002085,
+      "sha256": "5b37051e149cce22eb29bbc65c92245b6dae2a9d562c53d240045b02d0030aa4",
+      "fetched_at": "2026-10-27T20:47:07Z",
+      "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer"
+    },
+    {
+      "key": "dem_npz/los_angeles_basin/89ce98e489",
+      "path": "terrain/los_angeles_basin_89ce98e489_dem_30m_utm.npz",
+      "bytes": 10495797,
+      "sha256": "5cda9eb6dbd1682092cc64d24141abb91eddec93d68aa645a6c8157422506161",
+      "fetched_at": "2026-10-27T20:47:07Z",
+      "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer"
+    }
+  ],
+  "generated_at": "2026-10-27T20:47:08Z"
+}
