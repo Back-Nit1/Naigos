@@ -5,7 +5,10 @@ Photorealistic 3D Tiles come with the provider's own materials, and Naigos
 does not restyle them. Local OpenStreetMap extrusions are Naigos's own
 geometry, and this theme applies only to them. It colours the buildings, gives
 roofs a separate tone from walls, and sets a width hierarchy for roads, so that
-Tehran, Dubai and Mecca each have a distinct, readable look.
+Tehran, Dubai, Mecca, New York and Los Angeles each have a distinct, readable look. The theme is
+colour only: building height, density and the physics-grade obstacle surface
+(`--visual physics`, [contract](contracts/urban-obstacles-v1.md)) are separate, and the theme
+never applies to the obstacle surface.
 
 Everything here is presentation. The simulation never sees a building, and the
 theme does not change that.
@@ -36,6 +39,8 @@ theatre, plus a neutral `default` for any other theatre:
 | `tehran_basin` | terracotta, brick, apricot, stone, slate, grey-teal | steel blue, glass teal, silver |
 | `dubai_urban`  | sand, gold, champagne, teal, turquoise, white stone | glass teal, aqua, gold, silver, champagne |
 | `mecca_urban`  | sandstone, ochre, olive, sage, clay, cream  | pale sandstone, olive grey, bronze |
+| `nyc_harbor`   | stone, brick, limestone, steel grey, copper | cool glass, steel blue, silver |
+| `los_angeles_basin` | concrete, pale stone, stucco, clay, sage-blue, dark concrete | blue-green glass, steel, warm highlight |
 
 About 10% of lower buildings take an accent swatch instead of a wall swatch.
 

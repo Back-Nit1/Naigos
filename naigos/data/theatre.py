@@ -14,6 +14,11 @@ from naigos.research import cache as _cache
 from naigos.research.spec import load_component
 
 from .terrain import TerrainGrid
+from .urban_obstacles import (ExpectedFrame, UrbanObstacleGrid, UrbanObstacleUnavailable,
+                              load_urban_obstacles)
+
+
+DEFAULT_AOI_NAME = "owens_valley"
 
 
 @dataclass
@@ -82,6 +87,8 @@ class Theatre:
     surface_density_ratio: float
     density_profile: list[dict[str, Any]]
     provenance: dict[str, str]
+    #: Physics-grade urban obstacles; present iff the AOI declares ``urban_physics``.
+    urban_obstacles: UrbanObstacleGrid | None = None
 
     def departure_fields(self) -> list[Airfield]:
         return [a for a in self.airfields if a.usable_as_departure]
@@ -98,6 +105,31 @@ def _dem_path(aoi: str | None = None) -> Path:
     if not path.exists():
         raise FileNotFoundError(f"{path} missing; run `naigos-research` to rebuild the cache")
     return path
+
+
+def load_urban_obstacles_for(aoi_name: str) -> UrbanObstacleGrid | None:
+    """The theatre's urban obstacle artifact, or None if its AOI does not declare ``urban_physics``.
+
+    Fails closed: a theatre that declares it and has no component, no artifact, a corrupt one, or
+    one built for another AOI/fingerprint/UTM zone raises. Nothing else is substituted.
+    """
+    from naigos.research.aoi import get_aoi
+
+    aoi = get_aoi(aoi_name)
+    if aoi.urban_physics is None:
+        return None
+    try:
+        comp = load_component("data.urban_obstacles", aoi_name)
+    except FileNotFoundError as exc:
+        raise UrbanObstacleUnavailable(
+            f"{aoi_name} declares urban_physics but has no data.urban_obstacles component: {exc}") from None
+    p = comp["parameters"]
+    if p["aoi_fingerprint"] != aoi.fingerprint:
+        raise UrbanObstacleUnavailable(f"{aoi_name}: component was built for another AOI fingerprint")
+    path = _cache.cache_dir() / p["artifact_dir"]
+    return load_urban_obstacles(path, ExpectedFrame(
+        aoi_name=aoi.name, aoi_fingerprint=aoi.fingerprint, utm_epsg=p["utm_epsg"],
+        aoi_bounds_wgs84=aoi.bbox, content_sha256=p["content_sha256"]))
 
 
 def load_theatre(aoi_name: str | None = None) -> Theatre:
@@ -151,6 +183,7 @@ def load_theatre(aoi_name: str | None = None) -> Theatre:
         effective_earth_factor_k=atm["parameters"]["effective_earth_factor_k"],
         surface_density_ratio=atm["parameters"]["surface_density_ratio"],
         density_profile=atm["evidence"]["levels"],
+        urban_obstacles=load_urban_obstacles_for(aoi_name or DEFAULT_AOI_NAME),
         provenance={c: load_component(c, aoi_name)["generated_at"] for c in (
             "env.aoi", "data.terrain_dem", "data.airfields",
             "data.atmosphere", "data.flight_envelope", "model.detection",

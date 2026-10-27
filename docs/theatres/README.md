@@ -14,6 +14,8 @@ real-world data or at named locations. No city shown here is a battlefield.
 | `tehran_basin` | a dense basin city under a 4 km ridge (built-in AOI) | [tehran_basin.md](tehran_basin.md) |
 | `dubai_urban` | a flat Gulf-coast city and its inland dunes, 81 x 37 km | [dubai_urban.md](dubai_urban.md) |
 | `mecca_urban` | the rugged foothills and outer districts west of the city, 50 x 59 km; the historic centre is outside the box | [mecca_urban.md](mecca_urban.md) |
+| `nyc_harbor` | New York Harbor and its shores, 46 x 49 km, with a 5 x 5 km Lower Manhattan **physics-grade urban obstacle** sub-box | [nyc_harbor.md](nyc_harbor.md) |
+| `los_angeles_basin` | the coastal basin and its ranges, 57 x 55 km, with a 6 x 6 km Downtown **physics-grade urban obstacle** sub-box | [los_angeles_basin.md](los_angeles_basin.md) |
 
 The shipped checkpoint was trained on `owens_valley`, so every one of these is
 flown zero-shot, and each HUD says so.
@@ -42,12 +44,29 @@ developed on its own branch merges without touching another's files.
 | `docs/theatres/<aoi>/DATA.md` | the theatre's provenance doc | `naigos-research --aoi <aoi>` |
 | `naigos/demo/cities/<aoi>.json` | how the theatre is presented: urban box, atmosphere, cameras, ambience regions | hand-written, reviewed |
 | `tests/fixtures/viewer_grid_<aoi>.npz` | the viewer's terrain grid, for offline camera and georeference tests | `scripts/make_viewer_grid_fixture.py --aoi <aoi>` |
+| `components/aoi/<aoi>/data.urban_obstacles.json` | *only if the AOI declares `urban_physics`*: cites and hashes the obstacle artifact | `naigos-research --aoi <aoi>` |
+| `tests/fixtures/urban_physics_root/urban_physics/<aoi>/<id>/` | *same*: a committed copy of that artifact, for offline tests | copied from `data_cache/urban_physics/` |
 | `docs/theatres/<aoi>.md` | this theatre's own notes: bounds, sources, commands, limitations | hand-written |
 | `tests/test_theatre_<aoi>.py` | the theatre's own checks (landmarks, zones, configuration) | hand-written |
 
 `tests/test_city_presentation.py` and `tests/test_city_page.py` hold every
-city config to the shared standard automatically; a new theatre adds its files
-and changes no test.
+city config to the shared standard automatically, and
+`tests/test_theatre_urban_physics.py` does the same for every AOI that declares
+`urban_physics`; a new theatre adds its files and changes no test.
+
+## Physics urban obstacles versus presentation buildings
+
+A theatre may declare an `urban_physics` block in its AOI file: a sub-box and a cell
+size. It then needs a **physics-grade urban obstacle artifact** -- a versioned,
+hashed raster of structure tops built from public-domain lidar
+([contract](../contracts/urban-obstacles-v1.md)) -- and **fails closed without it**.
+That artifact is the only urban geometry the simulation may collide with. The OSM
+city layer (`naigos.demo.urban`) and provider tiles are presentation only, in a
+different cache (`data_cache/visual/`, never `urban_physics/`), and never stand in for
+it. The viewer's HUD names four surfaces separately: physics terrain, physics urban
+obstacles, presentation-only local buildings, presentation-only provider buildings.
+`--visual physics` draws the artifact itself; every other mode reports it as
+"not drawn" and never as physical.
 
 ## Commands, for any theatre `<aoi>`
 
@@ -85,7 +104,7 @@ project stays out of, each with the consumers that enforce it:
 
 | policy | enforced by |
 | --- | --- |
-| `extraction` | `naigos.demo.urban`: no footprint with a vertex inside is kept; roads are cut at the edge |
+| `extraction` | `naigos.demo.urban`: no footprint with a vertex inside is kept; roads are cut at the edge. Also `naigos.research.sources.urban_physics`: those cells of the obstacle artifact are no-data (unknown), never open air |
 | `airfield` | `naigos.research.sources.airports`: no start point inside |
 | `camera` | `naigos.demo.cities`: no preset sits in, aims at or frames it; the page keeps the free camera out and turns the chase camera away |
 | `ambience` | `naigos.demo.ambience`: no effect originates within the zone, its buffer and a 1.5 km margin |

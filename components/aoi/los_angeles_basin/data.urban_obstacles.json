@@ -1,0 +1,169 @@
+{
+  "id": "data.urban_obstacles",
+  "role": "Physics-grade structure surface: the only urban geometry the env may collide with.",
+  "inputs": [
+    "AOI urban_physics box",
+    "USGS 3DEP bare-earth DEM",
+    "USGS 3DEP lidar point cloud"
+  ],
+  "outputs": [
+    "versioned immutable obstacle raster (ground, top, height, coverage, building, uncertainty)"
+  ],
+  "decision": "Rasterise structures to a 10 m grid (592 x 546) inside the documented urban physics box, keep coverage explicit, and refuse to run the theatre without it.",
+  "rationale": "3DEP is a bare-earth surface, so cities are invisible to line of sight and collision without a separate structure layer. Public-domain lidar gives measured structure tops; cells are conservative (any structure in the cell blocks it) and unknown cells stay unknown rather than becoming open air or zero-height buildings. Presentation geometry (OSM, provider tiles) is a different cache namespace and never substitutes.",
+  "parameters": {
+    "schema": "naigos.urban_obstacles",
+    "schema_version": 1,
+    "content_sha256": "6f792719e131499fe4661a3d17b079d86ed247199387f8b66c9c59757699a787",
+    "metadata_sha256": "b88ff33f72619726df14f9fe24880a23ba0b246e9cfdeb207a14e8850b6380ff",
+    "payload_sha256": "4b9a615b4532f2f7e557a93da462e4b92c171788e2c3ae3052fb6286f1183074",
+    "artifact_dir": "urban_physics/los_angeles_basin/6f792719e131499f",
+    "cell_m": 10.0,
+    "nx": 592,
+    "ny": 546,
+    "physics_bounds_wgs84": [
+      -118.28,
+      34.025,
+      -118.215,
+      34.075
+    ],
+    "utm_epsg": 32611,
+    "env_origin_utm_m": [
+      351258.7662446544,
+      3741512.9654598576
+    ],
+    "grid_origin_enu_m": [
+      30640.0,
+      24160.0
+    ],
+    "aoi_fingerprint": "89ce98e489"
+  },
+  "evidence": {
+    "lidar_ground_minus_dem_median_m": -0.035,
+    "lidar_points_kept": 35134393,
+    "lidar_nodes": 1298,
+    "lidar_spike_cells_repaired": 0,
+    "schema": "naigos.urban_obstacles",
+    "schema_version": 1,
+    "content_sha256": "6f792719e131499fe4661a3d17b079d86ed247199387f8b66c9c59757699a787",
+    "metadata_sha256": "b88ff33f72619726df14f9fe24880a23ba0b246e9cfdeb207a14e8850b6380ff",
+    "payload_sha256": "4b9a615b4532f2f7e557a93da462e4b92c171788e2c3ae3052fb6286f1183074",
+    "aoi": "los_angeles_basin",
+    "aoi_fingerprint": "89ce98e489",
+    "cell_m": 10.0,
+    "nx": 592,
+    "ny": 546,
+    "coverage_fraction": 0.999811,
+    "building_cells": 260963,
+    "max_height_agl_m": 310.1953125,
+    "sources": [
+      {
+        "key": "usgs_3dep_dem",
+        "product_id": "3DEP best-available, 10 m",
+        "licence": "Public domain (US Government work, USGS)",
+        "captured": "varies by source tile (3DEP seamless mosaic)",
+        "published": "unknown (service mosaic)"
+      },
+      {
+        "key": "usgs_3dep_lidar",
+        "product_id": "CA_LosAngeles_1_B23; classes [1, 17]; no TNM tile listing used",
+        "licence": "Public domain (US Government work, USGS)",
+        "captured": "2023-09-25 .. 2024-01-08",
+        "published": "EPT copy built 2025-11-21 (collection CA_LosAngeles_1_B23; publisher release date not listed by TNM)"
+      }
+    ],
+    "code_commit": "7e8d468fd78beb259ef3e5adef429e997969d174",
+    "dirty": false,
+    "building_height_m_p50_p90_p99_max": [
+      9.7,
+      23.8,
+      79.0,
+      310.2
+    ],
+    "exclusion_cells": {},
+    "excluded_cells": 0
+  },
+  "invariants": [
+    "Loaded only through naigos.data.urban_obstacles.load_urban_obstacles with an ExpectedFrame.",
+    "A missing, partial or corrupt artifact is an error for this theatre; there is no fallback.",
+    "Unknown cells (coverage 0) are NaN, never zero-height buildings.",
+    "No OSM, provider-tile or screenshot-derived geometry enters this artifact."
+  ],
+  "caveats": [
+    "Lidar is a capture-date snapshot (see sources[].captured); it is not current conditions.",
+    "Structure heights are per-cell maxima at the stated resolution: thin spires and masts are lower bounds, and a 10 m cell cannot resolve street canyons or building gaps narrower than a cell.",
+    "Point classification (building, bridge deck, ground) is the data provider's.",
+    "Protected-zone exclusions are no-data, so those areas are unknown rather than open."
+  ],
+  "license": "Public domain (US Government work, USGS)",
+  "sources": [
+    {
+      "key": "usgs_3dep",
+      "name": "USGS 3D Elevation Program (3DEP)",
+      "license": "Public domain (US Government work, USGS)",
+      "license_url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits",
+      "citation": "U.S. Geological Survey, 3D Elevation Program (3DEP) 1/3 arc-second Digital Elevation Model. USGS National Map 3DEP Dynamic Service.",
+      "docs": [
+        "https://www.usgs.gov/3d-elevation-program"
+      ],
+      "attribution_required": false,
+      "notes": "CONUS coverage only. Non-US areas of interest must fall back to Copernicus GLO-30."
+    },
+    {
+      "key": "usgs_3dep_lidar",
+      "name": "USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data)",
+      "license": "Public domain (US Government work, USGS)",
+      "license_url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits",
+      "citation": "U.S. Geological Survey, 3D Elevation Program (3DEP) lidar point clouds, distributed as Entwine Point Tiles in the usgs-lidar-public AWS open-data bucket; product dates from the USGS National Map Access API.",
+      "docs": [
+        "https://www.usgs.gov/3d-elevation-program",
+        "https://usgs.entwine.io/"
+      ],
+      "attribution_required": false,
+      "notes": "Fetched only by naigos.research.sources.urban_physics, bounded to a documented urban physics box, and cached with a sha256 per tile. Point classification is the data provider's, not ours; its accuracy is a stated limitation of every artifact."
+    }
+  ],
+  "cached_artifacts": [
+    {
+      "key": "urban_physics/los_angeles_basin/6f792719e131499f/payload.bin",
+      "path": "urban_physics/los_angeles_basin/6f792719e131499f/payload.bin",
+      "bytes": 5818176,
+      "sha256": "4b9a615b4532f2f7e557a93da462e4b92c171788e2c3ae3052fb6286f1183074",
+      "fetched_at": "2026-10-27T21:09:27Z",
+      "url": "derived"
+    },
+    {
+      "key": "urban_physics/los_angeles_basin/6f792719e131499f/metadata.json",
+      "path": "urban_physics/los_angeles_basin/6f792719e131499f/metadata.json",
+      "bytes": 4031,
+      "sha256": "b88ff33f72619726df14f9fe24880a23ba0b246e9cfdeb207a14e8850b6380ff",
+      "fetched_at": "2026-10-27T21:09:27Z",
+      "url": "derived"
+    },
+    {
+      "key": "urban_physics/los_angeles_basin/6f792719e131499f/descriptor.json",
+      "path": "urban_physics/los_angeles_basin/6f792719e131499f/descriptor.json",
+      "bytes": 360,
+      "sha256": "2975dbde4db93b0d3ecc0ef56b0a20835c828238e80a986dec75bbe2c3dbd709",
+      "fetched_at": "2026-10-27T21:09:27Z",
+      "url": "derived"
+    },
+    {
+      "key": "urban_ground/los_angeles_basin/89ce98e489/10m",
+      "path": "urban_src/los_angeles_basin_89ce98e489_ground_10m_utm.tif",
+      "bytes": 1860271,
+      "sha256": "4a62f64a51213f9ebdb4253c3552a5782fa33e1da8159f1ff20a3c1fd8d66489",
+      "fetched_at": "2026-10-27T20:54:44Z",
+      "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer"
+    },
+    {
+      "key": "urban_lidar_rasters/los_angeles_basin/89ce98e489/10m",
+      "path": "urban_src/los_angeles_basin_89ce98e489_lidar_cells.npz",
+      "bytes": 10478004,
+      "sha256": "365d231815c54fb2324cb8a1499a1b882c71ebb4ce84454fc178dbc8fd01d9d2",
+      "fetched_at": "2026-10-27T21:01:55Z",
+      "url": "https://usgs-lidar-public.s3.amazonaws.com/CA_LosAngeles_1_B23/ept.json"
+    }
+  ],
+  "generated_at": "2026-10-27T21:09:27Z"
+}
