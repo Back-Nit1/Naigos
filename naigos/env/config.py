@@ -23,6 +23,12 @@ WEATHER_DISABLED = "weather-disabled-v0"
 WEATHER_AR1 = "bounded-ar1-weather-v1"
 WEATHER_MODELS = (WEATHER_DISABLED, WEATHER_AR1)
 ENV_VEHICLE_WEATHER = "resource-world-v1/vehicle-weather"
+ENV_URBAN_VEHICLE_WEATHER = "resource-world-v1/urban-vehicle-weather"
+
+MISSION_LEGACY = "legacy-objective-v0"
+MISSION_V1 = "procedural-mission-v1"
+MISSION_MODELS = (MISSION_LEGACY, MISSION_V1)
+MISSION_FAMILIES = ("transit", "multi_leg", "time_on_station", "survey_corridor", "recovery")
 
 
 @dataclass(frozen=True)
@@ -86,6 +92,51 @@ def weather_problems(cfg: WeatherConfig) -> list[str]:
         problems.append("weather.scale_length_m must contain three positive values")
     if cfg.gust_clip_sigma <= 0 or cfg.severity_scale < 0 or cfg.estimate_noise_scale < 0:
         problems.append("weather gust/severity/noise scales must be non-negative with a positive clip")
+    return problems
+
+
+@dataclass(frozen=True)
+class MissionConfig:
+    """Opt-in bounded procedural mission state machine."""
+
+    model: str = MISSION_LEGACY
+    schema_version: int = 1
+    family: str = "transit"
+    scenario_id: str = "legacy"
+    max_stages: int = 4
+    stage_radius_m: float = 3_000.0
+    stage_vertical_half_m: float = 1_500.0
+    dwell_required_s: float = 60.0
+    deadline_s: float = 900.0
+    reveal_future_stages: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.model == MISSION_V1
+
+    @property
+    def observation_dim(self) -> int:
+        return 8 if self.enabled else 0
+
+
+def mission_problems(cfg: MissionConfig, resource: "ResourceWorldConfig") -> list[str]:
+    problems: list[str] = []
+    if cfg.model not in MISSION_MODELS:
+        problems.append(f"mission.model {cfg.model!r} is not one of {MISSION_MODELS}")
+    if cfg.schema_version != 1:
+        problems.append("mission.schema_version must be 1")
+    if cfg.family not in MISSION_FAMILIES:
+        problems.append(f"mission.family {cfg.family!r} is not one of {MISSION_FAMILIES}")
+    if cfg.max_stages < 1 or cfg.max_stages > 8:
+        problems.append("mission.max_stages must be in [1, 8]")
+    if cfg.stage_radius_m <= 0 or cfg.stage_vertical_half_m <= 0:
+        problems.append("mission stage radii must be positive")
+    if cfg.dwell_required_s <= 0 or cfg.deadline_s <= 0:
+        problems.append("mission dwell and deadline must be positive")
+    if cfg.enabled and cfg.family == "recovery" and not resource.enabled:
+        problems.append("mission family 'recovery' requires the endurance resource model")
+    if cfg.reveal_future_stages:
+        problems.append("mission.reveal_future_stages is not implemented; future stages stay hidden")
     return problems
 
 # --- threat kinds -------------------------------------------------------------
@@ -379,6 +430,7 @@ class EnvConfig:
     hash: SpatialHashConfig = field(default_factory=SpatialHashConfig)
     resource: ResourceWorldConfig = field(default_factory=ResourceWorldConfig)
     weather: WeatherConfig = field(default_factory=WeatherConfig)
+    mission: MissionConfig = field(default_factory=MissionConfig)
     threat_kinds: tuple[ThreatKindConfig, ...] = field(default_factory=default_threat_kinds)
 
     objective_radius: float = 3_000.0  # m, arrival tolerance (horizontal)
@@ -445,7 +497,7 @@ class EnvConfig:
     @property
     def ego_dim(self) -> int:
         return ((14 if self.obs_edge_features else 10) + self.resource.observation_dim
-                + self.weather.observation_dim)
+                + self.weather.observation_dim + self.mission.observation_dim)
 
     @property
     def environment_model_id(self) -> str:

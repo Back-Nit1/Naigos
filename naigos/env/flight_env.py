@@ -26,6 +26,7 @@ import jax.numpy as jnp
 
 from . import airframe as af_mod
 from . import detection as det_mod
+from . import mission as mission_mod
 from . import obs as obs_mod
 from . import resource as resource_mod
 from . import terrain as terrain_mod
@@ -37,6 +38,7 @@ from .config import (
     TRAIN_ROUTE_CENTERS_DEG,
     EnvConfig,
     resource_world_problems,
+    mission_problems,
     route_protocol_problems,
     weather_problems,
 )
@@ -77,6 +79,7 @@ class EnvState(NamedTuple):
     # Fixed-shape neutral state in legacy models; active only when the explicit
     # vehicle-weather environment identity is selected.
     weather: weather_mod.WeatherState
+    mission: mission_mod.MissionState
 
 
 class RewardTerms(NamedTuple):
@@ -106,7 +109,7 @@ class NaigosEnv:
         randomisation, but the headline result should be run on a real DEM.
         """
         problems = (route_protocol_problems(cfg) + resource_world_problems(cfg.resource)
-                    + weather_problems(cfg.weather))
+                    + weather_problems(cfg.weather) + mission_problems(cfg.mission, cfg.resource))
         if problems:
             raise ValueError("invalid route configuration:\n" + "\n".join(f"  - {p}" for p in problems))
         self.cfg = cfg
@@ -199,6 +202,13 @@ class NaigosEnv:
         to_obj = objective - start
         air, resource = resource_mod.initial_state(cfg, key, hmap, start, objective, bounds)
         weather = weather_mod.initial_state(cfg.weather, key, start[:, 2])
+        mission = mission_mod.initial_state(
+            cfg.mission, key, start, objective, resource.diversion_pos,
+            resource.diversion_active, cfg.dt,
+        )
+        if cfg.mission.enabled:
+            objective = mission_mod.current_target(mission)
+            to_obj = objective - start
 
         state = EnvState(
             air=air,
@@ -217,6 +227,7 @@ class NaigosEnv:
             red_scales=red_scales,
             resource=resource,
             weather=weather,
+            mission=mission,
         )
         return state, self.observe(state)
 
@@ -377,6 +388,13 @@ class NaigosEnv:
         if cfg.weather.enabled:
             extra = weather_mod.observation_features(cfg.weather, state.weather, state.air.psi)
             ob = ob._replace(ego=jnp.concatenate([ob.ego, extra], axis=-1))
+        if cfg.mission.enabled:
+            recovery_available = jnp.any(state.resource.diversion_active, axis=-1)
+            extra = mission_mod.observation_features(
+                cfg.mission, state.mission, state.air.pos, state.air.psi, state.t,
+                recovery_available,
+            )
+            ob = ob._replace(ego=jnp.concatenate([ob.ego, extra], axis=-1))
         return ob
 
     # ----------------------------------------------------------------- step --
@@ -387,6 +405,8 @@ class NaigosEnv:
         key, k_kill, k_red = jax.random.split(state.key, 3)
 
         frozen = (~state.alive) | state.reached | state.resource.diverted
+        if cfg.mission.enabled:
+            frozen = frozen | state.mission.completed | state.mission.recovered | state.mission.failed
         fuel_before = state.air.fuel
 
         # sub-step the airframe: the decision rate (dt) is coarser than the rate
@@ -527,8 +547,21 @@ class NaigosEnv:
             )
             diverted_now = (at_gate & ~arrive & ~shot & ~terrain_hit & ~oob & ~dry
                              & state.alive & ~state.reached & ~state.resource.diverted)
+            if cfg.mission.enabled and cfg.mission.family == "recovery":
+                diverted_now = (at_gate & ~shot & ~terrain_hit & ~oob & ~dry
+                                 & state.alive & ~state.resource.diverted)
         else:
             diverted_now = jnp.zeros((cfg.n_blue,), dtype=bool)
+
+        mission_timeout = jnp.zeros((cfg.n_blue,), dtype=bool)
+        mission = state.mission
+        if cfg.mission.enabled:
+            loss = shot | terrain_hit | oob | (dry if cfg.resource.enabled else False)
+            mission, primary_now, recovered_now, mission_timeout = mission_mod.advance(
+                cfg.mission, state.mission, air.pos, dt, state.t + 1, loss, diverted_now,
+            )
+            arrive = primary_now
+            diverted_now = diverted_now | recovered_now
 
         alive = state.alive & ~shot & ~terrain_hit & ~oob
         if cfg.resource.enabled:
@@ -555,12 +588,15 @@ class NaigosEnv:
 
         t = state.t + 1
         diverted = state.resource.diverted | diverted_now
-        timeout = jnp.full((cfg.n_blue,), t >= cfg.max_steps) & alive & ~reached & ~diverted
+        timeout = ((jnp.full((cfg.n_blue,), t >= cfg.max_steps) | mission_timeout)
+                   & alive & ~reached & ~diverted)
         outcome = resource_mod.outcome_update(
             state.resource.outcome, arrive, diverted_now, shot, terrain_hit, oob,
             dry if cfg.resource.enabled else jnp.zeros_like(dry), timeout,
         )
         rstate = state.resource._replace(diverted=diverted, outcome=outcome)
+        objective = mission_mod.current_target(mission) if cfg.mission.enabled else state.objective
+        next_dist = jnp.linalg.norm((objective - air.pos)[:, :2], axis=-1)
         new_state = EnvState(
             air=air,
             threats=tstate,
@@ -568,8 +604,8 @@ class NaigosEnv:
             dwell=dwell,
             alive=alive,
             reached=reached,
-            objective=state.objective,
-            prev_dist=jnp.where(frozen, state.prev_dist, dist),
+            objective=objective,
+            prev_dist=jnp.where(frozen, state.prev_dist, next_dist),
             hmap=state.hmap,
             bounds=state.bounds,
             t=t,
@@ -578,9 +614,12 @@ class NaigosEnv:
             red_scales=state.red_scales,
             resource=rstate,
             weather=weather,
+            mission=mission,
         )
 
         agent_done = (~alive) | reached | diverted
+        if cfg.mission.enabled:
+            agent_done = agent_done | mission.failed | mission.completed | mission.recovered
         episode_done = jnp.all(agent_done) | (t >= cfg.max_steps)
 
         info = {
@@ -593,6 +632,7 @@ class NaigosEnv:
             "n_reached": jnp.sum(reached),
             "n_diverted": jnp.sum(diverted),
             "outcome": outcome,
+            "mission_outcome": mission.outcome,
             "mean_wind_enu": weather.mean_wind_enu,
             "gust_enu": weather.gust_enu,
             "density_ratio": weather.density_ratio,
@@ -650,6 +690,10 @@ class NaigosEnv:
             cfg, key, state.hmap, start, objective, state.bounds
         )
         fresh_weather = weather_mod.initial_state(cfg.weather, key, start[:, 2])
+        fresh_mission = mission_mod.initial_state(
+            cfg.mission, key, start, objective, fresh_resource.diversion_pos,
+            fresh_resource.diversion_active, cfg.dt,
+        )
         m = mask[:, None]
         air = jax.tree.map(
             lambda fresh, old: jnp.where(_bcast(mask, fresh), fresh, old),
@@ -672,11 +716,20 @@ class NaigosEnv:
             estimated_density_ratio=jnp.where(mask, fresh_weather.estimated_density_ratio, state.weather.estimated_density_ratio),
             stream_key=fresh_weather.stream_key,
         )
+        mission = jax.tree.map(
+            lambda fresh, old: jnp.where(_bcast(mask, fresh), fresh, old),
+            fresh_mission,
+            state.mission,
+        )
+        if cfg.mission.enabled:
+            objective = mission_mod.current_target(mission)
+            to_obj = objective - start
         clear = ~mask[None, :]
         return state._replace(
             air=air,
             resource=resource,
             weather=weather,
+            mission=mission,
             objective=jnp.where(m, objective, state.objective),
             prev_dist=jnp.where(mask, jnp.linalg.norm(to_obj[:, :2], axis=-1), state.prev_dist),
             alive=state.alive | mask,
@@ -740,6 +793,11 @@ class NaigosEnv:
             "density_ratio": state2.weather.density_ratio,
             "air_velocity": af_mod.velocity(state2.air),
             "ground_velocity": info["ground_velocity"],
+            "mission_stage_before": state.mission.current_stage,
+            "mission_stage_after": state2.mission.current_stage,
+            "mission_dwell_before": state.mission.dwell_s,
+            "mission_dwell_after": state2.mission.dwell_s,
+            "mission_outcome": state2.mission.outcome,
         }
         if memory is not None:
             ev["memory_before"], ev["memory_after"] = memory, memory_after
@@ -794,6 +852,11 @@ class NaigosEnv:
             "density_ratio": info["density_ratio"],
             "air_velocity": info["air_velocity"],
             "ground_velocity": info["ground_velocity"],
+            "mission_stage": state2.mission.current_stage,
+            "mission_dwell_s": state2.mission.dwell_s,
+            "mission_completed": state2.mission.completed,
+            "mission_failed": state2.mission.failed,
+            "mission_outcome": state2.mission.outcome,
         }
 
     def rollout(self, key, policy, n_steps: int | None = None, action_filter=None, route=None, record: bool = False):

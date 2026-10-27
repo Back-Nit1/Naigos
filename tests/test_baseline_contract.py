@@ -33,10 +33,10 @@ CFG = EnvConfig(
 
 
 def test_runtime_pytrees_only_gained_trailing_neutral_fields():
-    assert EnvState._fields[:-2] == (
+    assert EnvState._fields[:-3] == (
         "air", "threats", "lock", "dwell", "alive", "reached", "objective", "prev_dist",
         "hmap", "bounds", "t", "key", "route", "red_scales",
-    ) and EnvState._fields[-2:] == ("resource", "weather")
+    ) and EnvState._fields[-3:] == ("resource", "weather", "mission")
     assert RewardTerms._fields[:5] == ("progress", "exposure", "lock_level", "envelope_dwell", "arrived")
     assert set(RewardTerms._fields) - {"diverted"} == set(RewardTerms._fields[:5]) | {
         "shotdown", "fuel_used", "g_excess", "terrain_violation", "ceiling_violation",

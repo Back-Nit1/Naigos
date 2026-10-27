@@ -39,6 +39,7 @@ RNG_STREAM_IDS = {
     "compute": 105,
     "weather": 106,
     "map": 107,
+    "mission": 108,
 }
 
 
