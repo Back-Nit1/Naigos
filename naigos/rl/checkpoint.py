@@ -245,7 +245,7 @@ def save(
     code_commit: str | None = None,
     resumed_from: list | None = None,
     urban_obstacle_digest: str | None = None,
-    cbf_contract_id: str = "hocbf-v1",
+    cbf_contract_id: str | None = None,
     code_dirty: bool | None = None,
 ) -> Path:
     """Write one checkpoint atomically.
@@ -602,11 +602,15 @@ def actor_schema_for_cfg(cfg) -> str:
     return RESOURCE_ACTOR_SCHEMA if cfg.resource.enabled else BASELINE_ACTOR_SCHEMA
 
 
+def cbf_contract_for_cfg(cfg) -> str:
+    return "cbf-weather-urban-v1" if (cfg.weather.enabled or cfg.urban.enabled) else "hocbf-v1"
+
+
 def environment_identity_record(
     cfg,
     *,
     urban_obstacle_digest: str | None = None,
-    cbf_contract_id: str = "hocbf-v1",
+    cbf_contract_id: str | None = None,
     code_commit: str | None = None,
     code_dirty: bool | None = None,
 ) -> dict:
@@ -630,7 +634,7 @@ def environment_identity_record(
         "seed_stream_version": "named-streams-v1",
         "policy_family": None,
         "resource_model": cfg.resource.model,
-        "cbf_contract_id": cbf_contract_id,
+        "cbf_contract_id": cbf_contract_id or cbf_contract_for_cfg(cfg),
         "code_commit": code_commit,
         "code_dirty": code_dirty,
         "weather_config": json.loads(json.dumps(dataclasses.asdict(cfg.weather))),
@@ -667,7 +671,7 @@ def require_environment_compatible(
     source,
     *,
     urban_obstacle_digest: str | None = None,
-    cbf_contract_id: str = "hocbf-v1",
+    cbf_contract_id: str | None = None,
 ) -> None:
     """Refuse cross-loading L0/ActorV1 and L1/ActorV2 checkpoints."""
     saved_model = environment_model_from_blob(blob)
@@ -713,7 +717,7 @@ def require_environment_compatible(
 
 def require_resume_compatible(
     blob: dict, cfg, ppo_cfg, policy_spec, source, *, urban_obstacle_digest: str | None = None,
-    cbf_contract_id: str = "hocbf-v1",
+    cbf_contract_id: str | None = None,
 ) -> None:
     """Every identity a resumed run must share with its checkpoint, checked up front.
 

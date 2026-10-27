@@ -70,6 +70,7 @@ def test_physics_rollout_records_explicit_versioned_evidence(tmp_path):
     fields = reader.metadata.schema.field_map
     expected = {
         "extension/weather_observation",
+        "extension/cbf_reason_bits",
         "privileged/mean_wind_enu",
         "privileged/gust_enu",
         "privileged/density_ratio",

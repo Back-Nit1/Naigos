@@ -852,7 +852,7 @@ class NaigosEnv:
 
     # ------------------------------------------------------------- rollouts --
     def evidence_frame(
-        self, state, obs, requested, executed, feasible, state2, terms, done, info,
+        self, state, obs, requested, executed, feasible, reason_bits, state2, terms, done, info,
         memory=None, memory_after=None,
     ):
         """Raw evidence for one transition, for trajectory recording.
@@ -869,6 +869,7 @@ class NaigosEnv:
             "obs_ego": obs.ego, "obs_threats": obs.threats, "obs_threat_mask": obs.threat_mask,
             "obs_friends": obs.friends, "obs_friend_mask": obs.friend_mask,
             "action_requested": requested, "action_executed": executed, "cbf_feasible": feasible,
+            "cbf_reason_bits": reason_bits,
             "terms": terms._asdict(),
             "fuel_before": state.air.fuel, "fuel_after": state2.air.fuel,
             "alive": state2.alive, "reached": state2.reached, "diverted": res.diverted,
@@ -915,7 +916,7 @@ class NaigosEnv:
             ev["memory_before"], ev["memory_after"] = memory, memory_after
         return ev
 
-    def _trace_frame(self, state2, obs2, action, feasible, terms, done, info, requested=None):
+    def _trace_frame(self, state2, obs2, action, feasible, reason_bits, terms, done, info, requested=None):
         """One rollout trace row. Shared by the stateless and recurrent scans so
         both carry every L1 resource field.
 
@@ -953,6 +954,7 @@ class NaigosEnv:
             "action_executed": action,
             "action_requested": action if requested is None else requested,
             "cbf_feasible": feasible,
+            "cbf_reason_bits": reason_bits,
             "terms": terms,
             "done": done,
             "threat_pos": state2.threats.pos,
@@ -1028,17 +1030,23 @@ class NaigosEnv:
                 action = requested
                 if action_filter is None:
                     feasible = jnp.ones((self.cfg.n_blue,), dtype=bool)
+                    reason_bits = jnp.zeros((self.cfg.n_blue,), dtype=jnp.uint16)
                 else:
-                    action, feasible = action_filter(state, obs, action)
+                    filtered = action_filter(state, obs, action)
+                    action, feasible = filtered[:2]
+                    reason_bits = (filtered[2] if len(filtered) == 3
+                                   else jnp.zeros((self.cfg.n_blue,), dtype=jnp.uint16))
                 state2, obs2, terms, done, info = self.step(state, action)
                 memory_next = jnp.where(
                     (info["agent_done"] | done)[..., None],
                     jnp.zeros_like(memory_next), memory_next,
                 )
-                out = self._trace_frame(state2, obs2, action, feasible, terms, done, info, requested)
+                out = self._trace_frame(
+                    state2, obs2, action, feasible, reason_bits, terms, done, info, requested
+                )
                 if record:
                     out["evidence"] = self.evidence_frame(
-                        state, obs, requested, action, feasible, state2, terms, done, info,
+                        state, obs, requested, action, feasible, reason_bits, state2, terms, done, info,
                         memory, memory_next,
                     )
                 return (state2, obs2, memory_next, k), out
@@ -1058,13 +1066,19 @@ class NaigosEnv:
             action = requested
             if action_filter is None:
                 feasible = jnp.ones((self.cfg.n_blue,), dtype=bool)
+                reason_bits = jnp.zeros((self.cfg.n_blue,), dtype=jnp.uint16)
             else:
-                action, feasible = action_filter(state, obs, action)
+                filtered = action_filter(state, obs, action)
+                action, feasible = filtered[:2]
+                reason_bits = (filtered[2] if len(filtered) == 3
+                               else jnp.zeros((self.cfg.n_blue,), dtype=jnp.uint16))
             state2, obs2, terms, done, info = self.step(state, action)
-            out = self._trace_frame(state2, obs2, action, feasible, terms, done, info, requested)
+            out = self._trace_frame(
+                state2, obs2, action, feasible, reason_bits, terms, done, info, requested
+            )
             if record:
                 out["evidence"] = self.evidence_frame(
-                    state, obs, requested, action, feasible, state2, terms, done, info
+                    state, obs, requested, action, feasible, reason_bits, state2, terms, done, info
                 )
             return (state2, obs2, k), out
 

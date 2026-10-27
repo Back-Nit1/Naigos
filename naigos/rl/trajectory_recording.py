@@ -290,6 +290,11 @@ def _extra_fields(cfg: EnvConfig, recurrent: bool, dims: Mapping[str, int]):
             f("privileged/burn_multiplier", "float32", ("agent",), "1",
               "TRUE episode burn multiplier. Privileged simulator state for auditing only; never an actor input.", ident),
         ]
+    if cfg.weather.enabled or cfg.urban.enabled:
+        fields += [
+            f("extension/cbf_reason_bits", "uint16", ("agent",), "1",
+              "Typed active-constraint bits: terrain=1, urban=2, threat=4, bounds=8, authority=16, resource=32."),
+        ]
     if cfg.weather.enabled:
         fields += [
             f("extension/weather_observation", "float32", ("agent", "weather_feature"), "1",
@@ -485,6 +490,8 @@ def to_chunk(
             "privileged/burn_multiplier": ev_np["burn_multiplier"].astype(np.float32),
         })
     offset = base + cfg.resource.observation_dim
+    if cfg.weather.enabled or cfg.urban.enabled:
+        out["extension/cbf_reason_bits"] = ev_np["cbf_reason_bits"].astype(np.uint16)
     if cfg.weather.enabled:
         out.update({
             "extension/weather_observation": ego[..., offset:offset + cfg.weather.observation_dim],

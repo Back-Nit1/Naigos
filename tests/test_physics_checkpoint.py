@@ -86,6 +86,7 @@ def test_schema6_records_and_enforces_every_new_physics_identity(tmp_path):
     assert identity["mission_config_sha256"] and identity["mission_bank_sha256"]
     assert identity["aircraft_physics_model"] == "fast-point-mass-weather-v1"
     assert identity["seed_stream_version"] == "named-streams-v1"
+    assert identity["cbf_contract_id"] == "cbf-weather-urban-v1"
     assert identity["policy_family"] == "deepsets@1"
     assert identity["resource_model"] == RESOURCE_WORLD_L1
     assert identity["code_commit"] == "a" * 40 and identity["code_dirty"] is False
