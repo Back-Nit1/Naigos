@@ -19,6 +19,75 @@ RESOURCE_WORLD_L1 = "resource-world-v1/endurance"
 RESOURCE_WORLD_MODELS = (RESOURCE_WORLD_BASELINE, RESOURCE_WORLD_L1)
 N_DIVERSION_GATES = 2
 
+WEATHER_DISABLED = "weather-disabled-v0"
+WEATHER_AR1 = "bounded-ar1-weather-v1"
+WEATHER_MODELS = (WEATHER_DISABLED, WEATHER_AR1)
+ENV_VEHICLE_WEATHER = "resource-world-v1/vehicle-weather"
+
+
+@dataclass(frozen=True)
+class WeatherConfig:
+    """Immutable vertical weather profile consumed by the simulator.
+
+    This is normalized scenario data, never a live-weather interface.  The
+    profile is piecewise linear in altitude.  ``turbulence_intensity_mps`` is
+    the stationary one-sigma gust magnitude for the bounded AR(1) engineering
+    surrogate; ``scale_length_m`` determines its correlation time as L / TAS.
+    The schema deliberately leaves room for a future Dryden filter without
+    changing the public profile fields.
+    """
+
+    model: str = WEATHER_DISABLED
+    schema_version: int = 1
+    scenario_id: str = "neutral"
+    altitude_knots_m: tuple[float, ...] = (0.0, 12_000.0)
+    wind_enu_mps: tuple[tuple[float, float, float], ...] = ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    density_ratio: tuple[float, ...] = (1.0, 1.0)
+    temperature_k: tuple[float, ...] = (288.15, 216.65)
+    sensing_attenuation: tuple[float, ...] = (1.0, 1.0)
+    turbulence_intensity_mps: tuple[float, ...] = (0.0, 0.0)
+    scale_length_m: tuple[float, float, float] = (200.0, 200.0, 100.0)
+    gust_clip_sigma: float = 4.0
+    severity_scale: float = 1.0
+    estimate_noise_scale: float = 0.15
+
+    @property
+    def enabled(self) -> bool:
+        return self.model == WEATHER_AR1
+
+    @property
+    def observation_dim(self) -> int:
+        # local wind estimate in body axes (3), turbulence magnitude, density,
+        # and declared normalized uncertainty. No future profile values.
+        return 6 if self.enabled else 0
+
+
+def weather_problems(cfg: WeatherConfig) -> list[str]:
+    problems: list[str] = []
+    if cfg.model not in WEATHER_MODELS:
+        problems.append(f"weather.model {cfg.model!r} is not one of {WEATHER_MODELS}")
+    if cfg.schema_version != 1:
+        problems.append("weather.schema_version must be 1")
+    n = len(cfg.altitude_knots_m)
+    if n < 2 or any(b <= a for a, b in zip(cfg.altitude_knots_m, cfg.altitude_knots_m[1:])):
+        problems.append("weather.altitude_knots_m must contain at least two increasing knots")
+    for name in ("wind_enu_mps", "density_ratio", "temperature_k", "sensing_attenuation", "turbulence_intensity_mps"):
+        if len(getattr(cfg, name)) != n:
+            problems.append(f"weather.{name} must have one value per altitude knot")
+    if any(len(v) != 3 for v in cfg.wind_enu_mps):
+        problems.append("weather.wind_enu_mps entries must be ENU triples")
+    if any(v <= 0 for v in cfg.density_ratio):
+        problems.append("weather.density_ratio must be positive")
+    if any(v <= 0 for v in cfg.temperature_k):
+        problems.append("weather.temperature_k must be positive")
+    if any(v < 0 for v in cfg.turbulence_intensity_mps):
+        problems.append("weather.turbulence_intensity_mps must be non-negative")
+    if len(cfg.scale_length_m) != 3 or any(v <= 0 for v in cfg.scale_length_m):
+        problems.append("weather.scale_length_m must contain three positive values")
+    if cfg.gust_clip_sigma <= 0 or cfg.severity_scale < 0 or cfg.estimate_noise_scale < 0:
+        problems.append("weather gust/severity/noise scales must be non-negative with a positive clip")
+    return problems
+
 # --- threat kinds -------------------------------------------------------------
 # Kinds are DATA, not an enum: the count and the parameters come from
 # `components/model.detection.json` via `naigos.env.theatre_bridge`, so the real
@@ -309,6 +378,7 @@ class EnvConfig:
     terrain: TerrainConfig = field(default_factory=TerrainConfig)
     hash: SpatialHashConfig = field(default_factory=SpatialHashConfig)
     resource: ResourceWorldConfig = field(default_factory=ResourceWorldConfig)
+    weather: WeatherConfig = field(default_factory=WeatherConfig)
     threat_kinds: tuple[ThreatKindConfig, ...] = field(default_factory=default_threat_kinds)
 
     objective_radius: float = 3_000.0  # m, arrival tolerance (horizontal)
@@ -374,7 +444,12 @@ class EnvConfig:
     # --- observation feature widths (derived; kept here so nets can import) ---
     @property
     def ego_dim(self) -> int:
-        return (14 if self.obs_edge_features else 10) + self.resource.observation_dim
+        return ((14 if self.obs_edge_features else 10) + self.resource.observation_dim
+                + self.weather.observation_dim)
+
+    @property
+    def environment_model_id(self) -> str:
+        return ENV_VEHICLE_WEATHER if self.weather.enabled else self.resource.model
 
     @property
     def n_threat_kinds(self) -> int:

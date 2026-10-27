@@ -30,6 +30,7 @@ from . import obs as obs_mod
 from . import resource as resource_mod
 from . import terrain as terrain_mod
 from . import threats as threats_mod
+from . import weather as weather_mod
 from .airframe import AircraftState
 from .config import (
     ROUTE_FAMILY_NAMES,
@@ -37,6 +38,7 @@ from .config import (
     EnvConfig,
     resource_world_problems,
     route_protocol_problems,
+    weather_problems,
 )
 from .threats import RedScales, ThreatState, red_scales_from_cfg
 
@@ -72,6 +74,9 @@ class EnvState(NamedTuple):
     # Always present so the pytree is fixed-shape. baseline-v0 carries neutral
     # values and never enters the resource transition branch.
     resource: resource_mod.ResourceState
+    # Fixed-shape neutral state in legacy models; active only when the explicit
+    # vehicle-weather environment identity is selected.
+    weather: weather_mod.WeatherState
 
 
 class RewardTerms(NamedTuple):
@@ -100,7 +105,8 @@ class NaigosEnv:
         generates synthetic terrain -- useful for tests and for domain
         randomisation, but the headline result should be run on a real DEM.
         """
-        problems = route_protocol_problems(cfg) + resource_world_problems(cfg.resource)
+        problems = (route_protocol_problems(cfg) + resource_world_problems(cfg.resource)
+                    + weather_problems(cfg.weather))
         if problems:
             raise ValueError("invalid route configuration:\n" + "\n".join(f"  - {p}" for p in problems))
         self.cfg = cfg
@@ -192,6 +198,7 @@ class NaigosEnv:
 
         to_obj = objective - start
         air, resource = resource_mod.initial_state(cfg, key, hmap, start, objective, bounds)
+        weather = weather_mod.initial_state(cfg.weather, key, start[:, 2])
 
         state = EnvState(
             air=air,
@@ -209,6 +216,7 @@ class NaigosEnv:
             route=route,
             red_scales=red_scales,
             resource=resource,
+            weather=weather,
         )
         return state, self.observe(state)
 
@@ -333,6 +341,8 @@ class NaigosEnv:
             tparams,
             state.threats.active,
         )
+        if cfg.weather.enabled:
+            det["pd"] = det["pd"] * state.weather.sensing_attenuation[None, :]
         # a dead or arrived aircraft stops generating returns
         live = (state.alive & ~state.reached & ~state.resource.diverted).astype(jnp.float32)
         det["pd"] = det["pd"] * live[None, :]
@@ -364,6 +374,9 @@ class NaigosEnv:
         if cfg.resource.enabled:
             extra = resource_mod.observation_features(cfg, state.air, state.objective, state.resource)
             ob = ob._replace(ego=jnp.concatenate([ob.ego, extra], axis=-1))
+        if cfg.weather.enabled:
+            extra = weather_mod.observation_features(cfg.weather, state.weather, state.air.psi)
+            ob = ob._replace(ego=jnp.concatenate([ob.ego, extra], axis=-1))
         return ob
 
     # ----------------------------------------------------------------- step --
@@ -380,14 +393,46 @@ class NaigosEnv:
         # at which a 7 g turn actually needs integrating.
         h = dt / cfg.substeps
         air_next = state.air
+        if cfg.weather.enabled:
+            weather_next = weather_mod.step(
+                cfg.weather, state.weather, state.air.pos[:, 2], state.air.speed, dt, state.t
+            )
+        else:
+            weather_next = state.weather
         for _ in range(cfg.substeps):
-            if cfg.resource.enabled:
+            if cfg.weather.enabled:
+                burn_multiplier = (state.resource.burn_multiplier
+                                   if cfg.resource.enabled else 1.0)
+                air_next = af_mod.step_atmosphere(
+                    cfg.airframe, air_next, action, h,
+                    weather_next.mean_wind_enu, weather_next.gust_enu,
+                    weather_next.density_ratio, burn_multiplier,
+                )
+            elif cfg.resource.enabled:
                 air_next = af_mod.step(
                     cfg.airframe, air_next, action, h, state.resource.burn_multiplier
                 )
             else:
                 air_next = af_mod.step(cfg.airframe, air_next, action, h)
         air = jax.tree.map(lambda new, old: jnp.where(_bcast(frozen, new), old, new), air_next, state.air)
+        weather = weather_next._replace(
+            mean_wind_enu=jnp.where(frozen[:, None], state.weather.mean_wind_enu, weather_next.mean_wind_enu),
+            gust_enu=jnp.where(frozen[:, None], state.weather.gust_enu, weather_next.gust_enu),
+            density_ratio=jnp.where(frozen, state.weather.density_ratio, weather_next.density_ratio),
+            temperature_k=jnp.where(frozen, state.weather.temperature_k, weather_next.temperature_k),
+            sensing_attenuation=jnp.where(
+                frozen, state.weather.sensing_attenuation, weather_next.sensing_attenuation
+            ),
+            turbulence_intensity=jnp.where(
+                frozen, state.weather.turbulence_intensity, weather_next.turbulence_intensity
+            ),
+            estimated_wind_enu=jnp.where(
+                frozen[:, None], state.weather.estimated_wind_enu, weather_next.estimated_wind_enu
+            ),
+            estimated_density_ratio=jnp.where(
+                frozen, state.weather.estimated_density_ratio, weather_next.estimated_density_ratio
+            ),
+        )
 
         # --- red team moves, using the picture it had at the start of the step -
         psi_cmd, speed_cmd = self.red_policy(
@@ -411,6 +456,8 @@ class NaigosEnv:
         det = det_mod.detection_probability(
             state.hmap, cfg.terrain, cfg.detection, air.pos, air.psi, tstate.pos, tparams, tstate.active
         )
+        if cfg.weather.enabled:
+            det["pd"] = det["pd"] * weather.sensing_attenuation[None, :]
         live = (state.alive & ~state.reached & ~state.resource.diverted).astype(jnp.float32)
         pd = det["pd"] * live[None, :]
 
@@ -530,6 +577,7 @@ class NaigosEnv:
             route=state.route,
             red_scales=state.red_scales,
             resource=rstate,
+            weather=weather,
         )
 
         agent_done = (~alive) | reached | diverted
@@ -545,6 +593,13 @@ class NaigosEnv:
             "n_reached": jnp.sum(reached),
             "n_diverted": jnp.sum(diverted),
             "outcome": outcome,
+            "mean_wind_enu": weather.mean_wind_enu,
+            "gust_enu": weather.gust_enu,
+            "density_ratio": weather.density_ratio,
+            "air_velocity": af_mod.velocity(air),
+            "ground_velocity": af_mod.ground_velocity(
+                air, weather.mean_wind_enu, weather.gust_enu
+            ) if cfg.weather.enabled else af_mod.velocity(air),
         }
         return new_state, self.observe(new_state), terms, episode_done, info
 
@@ -594,6 +649,7 @@ class NaigosEnv:
         fresh_air, fresh_resource = resource_mod.initial_state(
             cfg, key, state.hmap, start, objective, state.bounds
         )
+        fresh_weather = weather_mod.initial_state(cfg.weather, key, start[:, 2])
         m = mask[:, None]
         air = jax.tree.map(
             lambda fresh, old: jnp.where(_bcast(mask, fresh), fresh, old),
@@ -605,10 +661,22 @@ class NaigosEnv:
             fresh_resource,
             state.resource,
         )
+        weather = state.weather._replace(
+            mean_wind_enu=jnp.where(m, fresh_weather.mean_wind_enu, state.weather.mean_wind_enu),
+            gust_enu=jnp.where(m, fresh_weather.gust_enu, state.weather.gust_enu),
+            density_ratio=jnp.where(mask, fresh_weather.density_ratio, state.weather.density_ratio),
+            temperature_k=jnp.where(mask, fresh_weather.temperature_k, state.weather.temperature_k),
+            sensing_attenuation=jnp.where(mask, fresh_weather.sensing_attenuation, state.weather.sensing_attenuation),
+            turbulence_intensity=jnp.where(mask, fresh_weather.turbulence_intensity, state.weather.turbulence_intensity),
+            estimated_wind_enu=jnp.where(m, fresh_weather.estimated_wind_enu, state.weather.estimated_wind_enu),
+            estimated_density_ratio=jnp.where(mask, fresh_weather.estimated_density_ratio, state.weather.estimated_density_ratio),
+            stream_key=fresh_weather.stream_key,
+        )
         clear = ~mask[None, :]
         return state._replace(
             air=air,
             resource=resource,
+            weather=weather,
             objective=jnp.where(m, objective, state.objective),
             prev_dist=jnp.where(mask, jnp.linalg.norm(to_obj[:, :2], axis=-1), state.prev_dist),
             alive=state.alive | mask,
@@ -667,6 +735,11 @@ class NaigosEnv:
             "reserve_fuel": res.reserve_fuel, "initial_fuel": res.initial_fuel,
             "burn_multiplier": res.burn_multiplier,
             "diversion_pos": res.diversion_pos, "diversion_active": res.diversion_active,
+            "mean_wind_enu": state2.weather.mean_wind_enu,
+            "gust_enu": state2.weather.gust_enu,
+            "density_ratio": state2.weather.density_ratio,
+            "air_velocity": af_mod.velocity(state2.air),
+            "ground_velocity": info["ground_velocity"],
         }
         if memory is not None:
             ev["memory_before"], ev["memory_after"] = memory, memory_after
@@ -716,6 +789,11 @@ class NaigosEnv:
             # (T, B) engagement firing solutions this step -- which threat a
             # logged shootdown can be attributed to
             "firing": info["firing"],
+            "mean_wind_enu": info["mean_wind_enu"],
+            "gust_enu": info["gust_enu"],
+            "density_ratio": info["density_ratio"],
+            "air_velocity": info["air_velocity"],
+            "ground_velocity": info["ground_velocity"],
         }
 
     def rollout(self, key, policy, n_steps: int | None = None, action_filter=None, route=None, record: bool = False):
