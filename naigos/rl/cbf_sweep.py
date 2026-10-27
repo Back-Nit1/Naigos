@@ -443,6 +443,7 @@ def env_config_from_blob(blob: dict, **overrides) -> EnvConfig:
     from ..env.config import (
         AirframeConfig,
         DetectionConfig,
+        ResourceWorldConfig,
         SpatialHashConfig,
         TerrainConfig,
         ThreatKindConfig,
@@ -454,6 +455,7 @@ def env_config_from_blob(blob: dict, **overrides) -> EnvConfig:
         "detection": DetectionConfig,
         "terrain": TerrainConfig,
         "hash": SpatialHashConfig,
+        "resource": ResourceWorldConfig,
     }
     kw: dict = {}
     for name, klass in nested.items():

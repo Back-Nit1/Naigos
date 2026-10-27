@@ -172,9 +172,25 @@ def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
     # (JAX float32 reductions), so a history produced before this split and one
     # produced after it are bit-identical.
     live = traj["alive"].astype(np.float32)
+    diverted = np.asarray(final.resource.diverted)
+    fuel_loss = np.asarray(traj["terms"].out_of_fuel)
+    terminal = np.asarray(final.reached) | diverted | ~np.asarray(final.alive)
+    final_fuel = np.asarray(final.air.fuel)
+    reserve = np.asarray(final.resource.reserve_fuel)
+    resource_enabled = bool(np.asarray(final.resource.diversion_active).any())
+    recovered = np.asarray(final.reached) | diverted
+    # L0's historical definition remains bit-for-bit. In L1 a live timeout is
+    # not counted as equivalent to reaching either a primary or safe recovery.
+    survived = (np.asarray(final.alive) & recovered) if resource_enabled else np.asarray(final.alive)
     return {
-        "survival_rate": float(final.alive.mean()),
+        "survival_rate": float(survived.mean()),
+        "recovery_rate": float(recovered.mean()),
         "objective_rate": float(final.reached.mean()),
+        "diversion_rate": float(diverted.mean()),
+        "fuel_loss_rate": float((fuel_loss.max(axis=1) > 0).sum() / (n_worlds * n_blue)),
+        "mean_terminal_reserve": float(
+            np.where(terminal, final_fuel - reserve, 0.0).sum() / max(terminal.sum(), 1)
+        ),
         "shootdown_rate": float(np.asarray(traj["terms"].shotdown).sum() / (n_worlds * n_blue)),
         **_exposure_metrics(traj, final, n_worlds, n_blue),
         "mean_lock": float((np.asarray(traj["terms"].lock_level) * live).sum() / max(live.sum(), 1)),
@@ -185,7 +201,7 @@ def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
         # flying into a hill.
         "terrain_rate": float(np.asarray(traj["terms"].terrain_violation).sum() / (n_worlds * n_blue)),
         "bounds_rate": float(np.asarray(traj["terms"].bounds_violation).sum() / (n_worlds * n_blue)),
-        "timeout_rate": float((final.alive & ~final.reached).mean()),
+        "timeout_rate": float((final.alive & ~final.reached & ~final.resource.diverted).mean()),
         # A filter that is infeasible most of the time is not a backstop. Report
         # it either way; see next-steps.md S-2.
         "cbf_infeasible_rate": float(
@@ -313,6 +329,37 @@ def avoid_nap_policy(obs, k):
         jnp.clip((400.0 - agl) / 300.0, -1, 1),
         jnp.full_like(herr, 0.6),
     ], -1)
+
+
+def make_reserve_divert_policy(cfg: EnvConfig):
+    """Observation-only L1 baseline: primary if feasible, best gate otherwise.
+
+    The controller deliberately receives no ``EnvState``. It reads the primary
+    heading and the resource margins/body-frame gate vectors already present in
+    ``ResourceObservation-v1`` and still emits the same three flight controls.
+    """
+    if not cfg.resource.enabled:
+        raise ValueError("reserve-divert requires resource-world-v1/endurance")
+    base = 14 if cfg.obs_edge_features else 10
+
+    def reserve_divert(obs, key):
+        del key
+        resource = obs.ego[:, base:]
+        primary_margin = resource[:, 3]
+        gates = resource[:, 6:].reshape(cfg.n_blue, 2, 7)
+        margins = jnp.where(gates[..., 6] > 0.5, gates[..., 5], -jnp.inf)
+        best = jnp.argmax(margins, axis=-1)
+        row = jnp.arange(cfg.n_blue)
+        gate_error = jnp.arctan2(gates[row, best, 1], gates[row, best, 0])
+        primary_error = jnp.arctan2(obs.ego[:, 4], obs.ego[:, 5])
+        heading_error = jnp.where(primary_margin >= 0.0, primary_error, gate_error)
+        return jnp.stack([
+            jnp.clip(2.0 * heading_error, -1.0, 1.0),
+            jnp.zeros_like(heading_error),
+            jnp.full_like(heading_error, 0.6),
+        ], axis=-1)
+
+    return reserve_divert
 
 
 BASELINE_POLICIES = {"direct": direct_route_policy, "avoid_nap": avoid_nap_policy}
@@ -572,6 +619,15 @@ def run(
             "policy_version": policy_spec.version,
             "recurrent_seq_len": int(ppo_cfg.recurrent_seq_len),
         }
+        if env_cfg.resource.enabled:
+            from ..env.resource_bank import resource_protocol
+
+            meta_config.update(
+                environment_model_id=env_cfg.resource.model,
+                observation_schema_id=ckpt.RESOURCE_OBSERVATION_SCHEMA,
+                resource_config=dataclasses.asdict(env_cfg.resource),
+                resource_bank=resource_protocol(),
+            )
         meta = {
             **meta,
             "config": meta_config,
@@ -644,6 +700,7 @@ def run(
 
     blob = ckpt.load(resume_from) if resume_from is not None else None
     if blob is not None:
+        ckpt.require_environment_compatible(blob, env_cfg, resume_from)
         rec = blob["recovery"]
         # Restore the curriculum state BEFORE building the env, because the env
         # is a function of the red level and the reward weights are a function

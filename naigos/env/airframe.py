@@ -68,8 +68,19 @@ def decode_action(cfg: AirframeConfig, action: jax.Array, speed: jax.Array):
     return phi_cmd, gamma_cmd, speed_cmd
 
 
-def step(cfg: AirframeConfig, st: AircraftState, action: jax.Array, dt: float) -> AircraftState:
-    """Integrate one step. Semi-implicit Euler; dt of ~1 s is stable at these lags."""
+def step(
+    cfg: AirframeConfig,
+    st: AircraftState,
+    action: jax.Array,
+    dt: float,
+    burn_multiplier: jax.Array | float = 1.0,
+) -> AircraftState:
+    """Integrate one step. Semi-implicit Euler; dt of ~1 s is stable at these lags.
+
+    ``burn_multiplier`` is the L1 resource-world's episode-local uncertainty.
+    Its default is exactly one so all baseline callers retain the original
+    transition without a second fuel calculation in the environment.
+    """
     phi_cmd, gamma_cmd, speed_cmd = decode_action(cfg, action, st.speed)
 
     # first-order actuator lags
@@ -93,7 +104,7 @@ def step(cfg: AirframeConfig, st: AircraftState, action: jax.Array, dt: float) -
     throttle = (speed - cfg.v_stall) / (cfg.v_max - cfg.v_stall)
     n = load_factor(phi)
     burn = cfg.burn_base + cfg.burn_throttle * throttle + cfg.burn_maneuver * jnp.abs(n - 1.0)
-    fuel = jnp.maximum(st.fuel - dt * burn, 0.0)
+    fuel = jnp.maximum(st.fuel - dt * burn * burn_multiplier, 0.0)
 
     # out of fuel: the airframe glides, it does not hover
     dry = (fuel <= 0.0).astype(jnp.float32)

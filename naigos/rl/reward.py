@@ -47,6 +47,10 @@ class RewardWeights:
     # --- task ---
     progress: float = 2.0  # per km closed on the objective
     arrived: float = 300.0
+    # Safe recovery is deliberately worth less than primary completion but
+    # substantially more than a loss. It is terminal, not a per-step shaping
+    # bonus, so a policy cannot farm it by loitering near a gate.
+    diverted: float = 100.0
 
     # --- efficiency / feasibility (fades in) ---
     fuel: float = 0.02  # per kg
@@ -105,6 +109,7 @@ def compute(terms: RewardTerms, w: RewardWeights, alive_mask=None) -> jnp.ndarra
     r = (
         w.progress * (terms.progress / 1_000.0)  # per km
         + w.arrived * terms.arrived
+        + w.diverted * terms.diverted
         - w.exposure * terms.exposure
         - w.lock * terms.lock_level
         - w.envelope * terms.envelope_dwell
