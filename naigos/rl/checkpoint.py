@@ -380,6 +380,13 @@ def assert_policy_compatible(blob: dict, expected: policies.PolicySpec) -> None:
         )
 
 
+def policy_kwargs(blob: dict) -> dict[str, str]:
+    """Keyword arguments for ``ppo.greedy_policy`` from checkpoint metadata."""
+
+    identity = policy_identity(blob)
+    return {"family": identity["family"], "version": identity["version"]}
+
+
 def is_resumable(path: str | os.PathLike) -> bool:
     """True if this file is a complete, schema-4 checkpoint.
 

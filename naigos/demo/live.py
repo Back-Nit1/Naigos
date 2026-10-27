@@ -1502,7 +1502,12 @@ def main(argv=None) -> int:
     ckpt = Path(a.checkpoint)
     if not ckpt.exists():
         raise SystemExit(f"{ckpt} not found. Train one, or use the shipped checkpoints/theatre_1000")
-    from ..rl.checkpoint import load as load_checkpoint, obs_config_from_blob, require_actor_ego_dim
+    from ..rl.checkpoint import (
+        load as load_checkpoint,
+        obs_config_from_blob,
+        policy_kwargs,
+        require_actor_ego_dim,
+    )
 
     blob = load_checkpoint(ckpt)
     params = blob["actor"]
@@ -1513,7 +1518,7 @@ def main(argv=None) -> int:
     env = NaigosEnv(cfg, hmap=hmap)
     sim = Simulation(
         env=env,
-        policy=greedy_policy(params, cfg),
+        policy=greedy_policy(params, cfg, **policy_kwargs(blob)),
         georef=GeoRef(**notes["georef"]),
         speed=a.speed,
         use_cbf=a.cbf,

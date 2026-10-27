@@ -22,7 +22,6 @@ import jax.numpy as jnp
 import numpy as np
 
 from ..env.flight_env import NaigosEnv
-from ..rl.networks import Actor
 from ..rl.ppo import greedy_policy
 from . import events as demo_events
 
@@ -67,14 +66,35 @@ def _summary(final, traj, cfg):
     }
 
 
-def run(env: NaigosEnv, trained_params, n_worlds: int, seed: int, use_cbf: bool = False):
+def run(
+    env: NaigosEnv,
+    trained_params,
+    n_worlds: int,
+    seed: int,
+    use_cbf: bool = False,
+    *,
+    policy_family="deepsets",
+    policy_version="1",
+):
     """Roll out untrained, trained and the direct-route baseline on IDENTICAL seeds."""
     cfg = env.cfg
     keys = jax.random.split(jax.random.PRNGKey(seed), n_worlds)
 
-    untrained = Actor(cfg).init(
-        jax.random.PRNGKey(12345),
-        *(lambda o: (o.ego, o.threats, o.threat_mask, o.friends, o.friend_mask))(env.reset(keys[0])[1]),
+    from ..rl import policies
+
+    actor = policies.create_actor(
+        cfg, family=policy_family, version=policy_version
+    )
+    actor_inputs = (lambda o: (
+        o.ego, o.threats, o.threat_mask, o.friends, o.friend_mask
+    ))(env.reset(keys[0])[1])
+    memory = policies.initial_memory(
+        cfg, family=policy_family, version=policy_version
+    )
+    untrained = actor.init(
+        jax.random.PRNGKey(12345), *actor_inputs
+    ) if memory is None else actor.init(
+        jax.random.PRNGKey(12345), *actor_inputs, memory
     )
 
     afilter = None
@@ -85,8 +105,12 @@ def run(env: NaigosEnv, trained_params, n_worlds: int, seed: int, use_cbf: bool 
 
     out = {}
     for name, pol in (
-        ("untrained", greedy_policy(untrained, cfg)),
-        ("trained", greedy_policy(trained_params, cfg)),
+        ("untrained", greedy_policy(
+            untrained, cfg, family=policy_family, version=policy_version
+        )),
+        ("trained", greedy_policy(
+            trained_params, cfg, family=policy_family, version=policy_version
+        )),
         ("direct_route_baseline", direct_route_policy),
         ("avoid_nap_baseline", avoid_nap_policy),
     ):
@@ -354,7 +378,7 @@ def main(argv=None):
                          "The summary table always covers every world; this only picks the one drawn.")
     a = ap.parse_args(argv)
 
-    from ..rl.checkpoint import load as load_checkpoint
+    from ..rl.checkpoint import load as load_checkpoint, policy_identity
 
     ck = load_checkpoint(a.checkpoint)
 
@@ -376,7 +400,11 @@ def main(argv=None):
     cfg = RedCurriculum().apply(cfg, ck.get("red_level", 0.0))
     env = NaigosEnv(cfg, hmap=hmap)
 
-    results = run(env, ck["actor"], a.worlds, a.seed, use_cbf=a.cbf)
+    identity = policy_identity(ck)
+    results = run(
+        env, ck["actor"], a.worlds, a.seed, use_cbf=a.cbf,
+        policy_family=identity["family"], policy_version=identity["version"],
+    )
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
 
