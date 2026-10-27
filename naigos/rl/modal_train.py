@@ -67,6 +67,7 @@ LOG_FILENAME = "train.log"
 # worker refuses a request unless these values match the requested metadata.
 _SOURCE_COMMIT_ENV = "NAIGOS_IMAGE_SOURCE_COMMIT"
 _SOURCE_DIRTY_ENV = "NAIGOS_IMAGE_SOURCE_DIRTY"
+_RESOURCE_ENV = "NAIGOS_IMAGE_RESOURCE_RESERVATION"
 _SOURCE_ROOT = Path(__file__).resolve().parents[2]
 DEPLOYED_SOURCE = runmeta.git_info(_SOURCE_ROOT)
 
@@ -129,6 +130,20 @@ def resource_reservation() -> dict:
         "cpu_cores": CPU_CORES,
         "memory_gib": MEMORY_MIB / 1024.0,
     }
+
+
+def image_resource_reservation(environ=None) -> dict:
+    """Read the reservation baked alongside the deployed function image."""
+    environ = os.environ if environ is None else environ
+    try:
+        value = json.loads(environ.get(_RESOURCE_ENV, "null"))
+    except json.JSONDecodeError:
+        value = None
+    if not isinstance(value, dict):
+        raise RuntimeError("deployed image has no verifiable resource reservation")
+    return value
+
+
 # Timeout: two of them, because one timeout for both sizes is a budget hazard in
 # whichever direction it is set. A smoke run that hangs must not be allowed to
 # bill six hours of GPU to prove the image works.
@@ -159,7 +174,10 @@ if modal is not None:
             "orbax-checkpoint>=0.5",
             extra_index_url="https://storage.googleapis.com/jax-releases/jax_cuda_releases.html",
         )
-        .env(_source_image_env(DEPLOYED_SOURCE))
+        .env({
+            **_source_image_env(DEPLOYED_SOURCE),
+            _RESOURCE_ENV: json.dumps(resource_reservation(), sort_keys=True),
+        })
         # the cited cache and the component specs travel with the image so the
         # GPU worker never needs network access -- the same offline guarantee
         # the local path has. `data_cache/` is ~170 MB; it is an image layer, so
@@ -356,6 +374,7 @@ if modal is not None:
 
         check("image", _image)
         check("source_identity", lambda: verify_image_source(meta.get("code") or {}))
+        check("resource_reservation", image_resource_reservation)
         check("gpu_backend", _gpu)
         check("data_cache", _cache)
         check("volume_write", _volume)
@@ -432,7 +451,7 @@ if modal is not None:
                 **(meta.get("runtime") or {}),
                 "image_source": image_source,
                 "modal_image_id": os.environ.get("MODAL_IMAGE_ID"),
-                "resource_reservation": resource_reservation(),
+                "resource_reservation": image_resource_reservation(),
             },
         }
         _, history = run(

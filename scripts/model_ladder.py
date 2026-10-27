@@ -132,7 +132,9 @@ def _check_declared_timeout_covers_deployment(plan: dict, modal_runs) -> None:
         )
 
 
-def _check_declared_resources_match_deployment(plan: dict, modal_runs) -> None:
+def _check_declared_resources_match_deployment(
+    plan: dict, modal_runs, marker: dict | None = None
+) -> None:
     """Make the priced reservation identical to the deployed reservation."""
     rates = plan["cost_rates"]
     expected = {
@@ -150,6 +152,12 @@ def _check_declared_resources_match_deployment(plan: dict, modal_runs) -> None:
         raise SystemExit(
             "refusing submission: priced resource reservation does not match the "
             f"deployed function: {mismatches}"
+        )
+    recorded = ((marker or {}).get("runtime") or {}).get("resource_reservation")
+    if recorded is not None and recorded != expected:
+        raise SystemExit(
+            "refusing submission: the verified smoke image used a different resource "
+            f"reservation than this launcher: smoke={recorded}, launcher={expected}"
         )
 
 
@@ -211,12 +219,11 @@ def _submit_plan(
     # Modal nor reads credentials/Volumes/deployments.
     from scripts import modal_runs
 
-    _check_declared_timeout_covers_deployment(plan, modal_runs)
-    _check_declared_resources_match_deployment(plan, modal_runs)
-
     # Preflight every run before spawning the first one. submit_prepared repeats
     # both checks at the actual call boundary to close the race.
     marker = modal_runs._read_volume_json(runmeta.SMOKE_MARKER)
+    _check_declared_timeout_covers_deployment(plan, modal_runs)
+    _check_declared_resources_match_deployment(plan, modal_runs, marker)
     for exp in pending:
         refusal = runmeta.verified_smoke_gate(exp["profile"]["name"], marker, code["commit"])
         if refusal:

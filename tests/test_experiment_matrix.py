@@ -225,6 +225,17 @@ def test_submit_prices_the_exact_deployed_resource_reservation():
     )
     cli._check_declared_resources_match_deployment(plan, deployed)
 
+    stale_marker = {
+        "runtime": {
+            "resource_reservation": {
+                "gpu_kind": "T4", "gpu_count": 1, "cpu_cores": 2,
+                "memory_gib": 4,
+            }
+        }
+    }
+    with pytest.raises(SystemExit, match="smoke image used a different"):
+        cli._check_declared_resources_match_deployment(plan, deployed, stale_marker)
+
     understated = json.loads(json.dumps(plan))
     understated["cost_rates"]["gpu_count"] = 0
     with pytest.raises(SystemExit, match="does not match the deployed function"):

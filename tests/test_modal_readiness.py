@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import json
 import re
 import sys
 from pathlib import Path
@@ -85,6 +86,10 @@ def test_deployed_image_source_is_independent_and_must_match_requested_code():
             {"commit": "abc123", "dirty": False},
             {"NAIGOS_IMAGE_SOURCE_COMMIT": "", "NAIGOS_IMAGE_SOURCE_DIRTY": "null"},
         )
+    reservation = {"gpu_kind": "A10G", "gpu_count": 1, "cpu_cores": 4, "memory_gib": 16}
+    assert modal_train.image_resource_reservation({
+        "NAIGOS_IMAGE_RESOURCE_RESERVATION": json.dumps(reservation)
+    }) == reservation
 
 
 # --- fetch: `modal volume get` paths are relative to the Volume root, not the mount -----------

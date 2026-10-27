@@ -855,6 +855,7 @@ def classify_status(
 PREFLIGHT_CHECKS = (
     "image",          # the remote image built and imports the training stack
     "source_identity",# deployed source matches the commit claimed by the launcher
+    "resource_reservation",  # priced resources match the deployed function declaration
     "gpu_backend",    # JAX resolved a CUDA backend, not a silent CPU fallback
     "data_cache",     # the cited cache travelled with the image and is readable
     "volume_write",   # the Volume is mounted, writable and survives a commit
