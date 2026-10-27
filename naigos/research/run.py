@@ -40,6 +40,8 @@ def _scoped_aoi_parameters(aoi) -> dict[str, Any]:
         "protected_zones": [z.as_dict() for z in aoi.protected_zones],
         "exclude_military_airfields": aoi.exclude_military_airfields,
         "scenario": aoi.scenario,
+        **({"urban_physics": {"bounds_wgs84": list(aoi.urban_physics.bounds),
+                              "cell_m": aoi.urban_physics.cell_m}} if aoi.urban_physics else {}),
         "definition_file": Path(aoi.definition_file).relative_to(cache.REPO_ROOT).as_posix()
         if Path(aoi.definition_file).is_relative_to(cache.REPO_ROOT) else Path(aoi.definition_file).name,
     }
