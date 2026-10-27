@@ -43,6 +43,7 @@ from ..env.threats import red_scales_from_cfg
 from . import checkpoint as ckpt
 from . import policies
 from . import runmeta
+from . import trajectory_recording as trec
 from .ppo import PPOConfig, greedy_policy, init_learner, init_rollout, make_train
 from .protocol_v2 import plateau_reason
 from .red_team import CurriculumDecision, CurriculumError, CurriculumState, RedCurriculum
@@ -85,6 +86,10 @@ class TrainConfig:
     #: Early stop on a curriculum plateau; `iterations` stays the hard cap. None
     #: (the default) is the fixed-iteration loop, with no extra history columns.
     plateau: PlateauConfig | None = None
+    #: Opt-in trajectory recording of the PPO collector's own rollouts
+    #: (`naigos.rl.trajectory_recording`). None / disabled records nothing and
+    #: leaves training bit-identical.
+    recording: trec.RecordingConfig | None = None
 
 
 def device_report() -> dict:
@@ -350,8 +355,17 @@ def evaluate(
     *,
     policy_family: policies.PolicyFamily | str = policies.DEFAULT_POLICY_FAMILY,
     policy_version: str = policies.DEFAULT_POLICY_VERSION,
+    recording: trec.RecordingConfig | None = None,
+    record_label: str = "eval",
+    record_seed: int = 0,
+    record_iteration: int = 0,
+    record_index: str | Path | None = None,
 ) -> dict:
-    """Deterministic evaluation over full-length episodes."""
+    """Deterministic evaluation over full-length episodes.
+
+    `recording` (opt-in) also writes the rollouts as one trajectory dataset; the
+    returned metrics are the same either way.
+    """
     pol = greedy_policy(
         actor_params, env.cfg, family=policy_family, version=policy_version
     )
@@ -360,9 +374,23 @@ def evaluate(
         from .cbf import CBFConfig, make_policy_filter
 
         afilter = make_policy_filter(CBFConfig(), env.cfg)
-    final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter)))(
+    record = trec.is_recording(recording)
+    final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter, record=record)))(
         jax.random.split(key, n_worlds)
     )
+    if record:
+        from .cbf import CBFConfig
+
+        trec.record_rollouts(
+            recording, env, traj.pop("evidence"), label=record_label, seed=record_seed,
+            iteration=record_iteration, index_path=record_index,
+            policy=trec.policy_record(
+                "greedy-actor", env.cfg, family=policy_family, version=policy_version,
+                artifact_sha256=trec.params_sha256(actor_params),
+                cbf=dataclasses.asdict(CBFConfig()) if use_cbf else None,
+            ),
+            collection={"rollout_key": trec.key_words(key), "use_cbf": bool(use_cbf)},
+        )
     return rollout_metrics(final, traj, n_worlds, env.cfg.n_blue)
 
 
@@ -551,8 +579,14 @@ def evaluate_route_bank(
     use_cbf: bool = False,
     training_seeds=(),
     splits: tuple[str, ...] = ("heldout", "train_geometry"),
+    recording: trec.RecordingConfig | None = None,
+    record_policy=None,
+    record_index: str | Path | None = None,
 ) -> dict:
     """Play the frozen route bank and report each split by route family.
+
+    `recording` (opt-in, needs `record_policy`, a `trajectory_recording.policy_record`)
+    writes one dataset per bank scenario: a dataset has one route and one seed.
 
     `policy(obs, key) -> action`; use `greedy_policy(actor_params, cfg)` for a
     learner. Every scenario is fixed by its (bearing, seed), so the result is a
@@ -570,10 +604,22 @@ def evaluate_route_bank(
 
         afilter = make_policy_filter(CBFConfig(), env.cfg)
     keys, routes = _route_bank_inputs(rows)
-    final, traj = jax.jit(jax.vmap(lambda k, r: env.rollout(k, policy, action_filter=afilter, route=r)))(
-        keys, routes
-    )
+    record = trec.is_recording(recording)
+    if record and record_policy is None:
+        raise trec.RecordingError("recording the route bank needs record_policy")
+    final, traj = jax.jit(
+        jax.vmap(lambda k, r: env.rollout(k, policy, action_filter=afilter, route=r, record=record))
+    )(keys, routes)
     final, traj = jax.device_get((final, traj))
+    if record:
+        evidence = traj.pop("evidence")
+        for i, row in enumerate(rows):
+            trec.record_rollouts(
+                recording, env, jax.tree.map(lambda a: a[i:i + 1], evidence),
+                label=f"route-{row.scenario_id}", seed=row.seed, policy=record_policy, route=routes[i],
+                index_path=record_index, scenario=f"route-bank/{env_config.ROUTE_BANK_VERSION}/{row.scenario_id}",
+                collection={"bank": env_config.ROUTE_BANK_VERSION, "split": row.split, "use_cbf": bool(use_cbf)},
+            )
     result: dict = {
         "protocol": ROUTE_EVAL_PROTOCOL,
         "bank": env_config.ROUTE_BANK_VERSION,
@@ -610,8 +656,14 @@ def evaluate_resource_bank(
     training_seeds=(),
     splits: tuple[str, ...] = ("heldout", "train_reference"),
     weights: RewardWeights | None = None,
+    recording: trec.RecordingConfig | None = None,
+    record_policy=None,
+    record_index: str | Path | None = None,
 ) -> dict:
     """Play the frozen resource bank (L1) and report each split by combination.
+
+    `recording` (opt-in, needs `record_policy`) writes one dataset per scenario,
+    each under that scenario's realized resource configuration.
 
     Every row fixes its master seed, route and all resource parameters, so the
     result is a deterministic function of the policy and the base environment.
@@ -638,6 +690,10 @@ def evaluate_resource_bank(
         raise ValueError("evaluate_resource_bank requires resource-world-v1/endurance")
     assert_resource_bank_disjoint(training_seeds)
     weights = weights or RewardWeights()
+    record = trec.is_recording(recording)
+    if record and record_policy is None:
+        raise trec.RecordingError("recording the resource bank needs record_policy")
+    one = lambda a: np.asarray(a)[None]  # noqa: E731
     hmap = env.fixed_hmap
     base_digest = base_config_digest(env.cfg, hmap)
     result: dict = {"protocol": RESOURCE_EVAL_PROTOCOL, **resource_protocol(base_digest), "problems": []}
@@ -651,14 +707,22 @@ def evaluate_resource_bank(
             key = jax.random.PRNGKey(row.seed)
             route = jnp.array([np.deg2rad(row.bearing_deg), row.family_id], dtype=jnp.float32)
             start = np.asarray(sub.reset_route(jax.random.split(key)[0], route)[0].air.pos)
-            final, traj = jax.device_get(jax.jit(lambda k, r: sub.rollout(k, policy, route=r))(key, route))
+            final, traj = jax.device_get(
+                jax.jit(lambda k, r: sub.rollout(k, policy, route=r, record=record))(key, route)
+            )
+            if record:
+                trec.record_rollouts(
+                    recording, sub, jax.tree.map(one, traj.pop("evidence")), label=f"resource-{row.scenario_id}",
+                    seed=row.seed, policy=record_policy, route=route, index_path=record_index,
+                    scenario=f"resource-bank/{row.scenario_id}",
+                    collection={"split": row.split, "combination": row.combination},
+                )
             terms = traj["terms"]
             report = verifier.verify_resource_trace(
                 cfg, traj, start=start, weights=dataclasses.asdict(weights),
                 reward=np.asarray(reward_mod.compute(terms, weights)),
                 cost=np.asarray(reward_mod.constraint_cost(terms)),
             )
-            one = lambda a: np.asarray(a)[None]  # noqa: E731
             f1, t1 = jax.tree.map(one, final), jax.tree.map(one, traj)
             finals.append(f1)
             trajs.append(t1)
@@ -693,6 +757,40 @@ def run(
     resume_from: str | Path | None = None,
     on_progress: Callable[[dict], None] | None = None,
     red_curriculum: RedCurriculum | None = None,
+):
+    """Train (see `_run`), optionally recording the PPO collector's rollouts.
+
+    Recording is `train_cfg.recording`; it is off by default. Datasets are
+    finalized only if training returns normally. Any exception leaves every open
+    dataset partial (no `manifest.json`) and listed as incomplete in
+    `<out_dir>/trajectory_index.json`, then propagates.
+    """
+    recorders: list = []
+    try:
+        result = _run(
+            env_cfg, ppo_cfg, train_cfg, hmap, meta, on_persist, resume_from, on_progress, red_curriculum,
+            _recorders=recorders,
+        )
+    except BaseException:
+        for r in recorders:
+            r.close(False)
+        raise
+    for r in recorders:
+        r.close(True)
+    return result
+
+
+def _run(
+    env_cfg: EnvConfig | None = None,
+    ppo_cfg: PPOConfig | None = None,
+    train_cfg: TrainConfig | None = None,
+    hmap=None,
+    meta: dict | None = None,
+    on_persist: Callable[[], None] | None = None,
+    resume_from: str | Path | None = None,
+    on_progress: Callable[[dict], None] | None = None,
+    red_curriculum: RedCurriculum | None = None,
+    _recorders: list | None = None,
 ):
     """Train, and record what it cost.
 
@@ -969,8 +1067,25 @@ def run(
             env, ppo_cfg, jax.random.fold_in(jax.random.PRNGKey(train_cfg.seed), it), red_scales
         )
 
+    # Opt-in trajectory recording. A resumed run's rollout is re-initialised
+    # (below), so its in-flight episodes cannot continue the interrupted
+    # process's: begin_segment starts new shards instead of pretending they do.
+    recorder = None
+    if trec.is_recording(train_cfg.recording):
+        recorder = trec.TrainingRecorder(
+            train_cfg.recording, env, out_dir=out, seed=train_cfg.seed, n_envs=ppo_cfg.n_envs,
+            n_steps=ppo_cfg.n_steps, resumed=blob is not None,
+            policy=trec.policy_record(
+                "online-learner", env_cfg, family=ppo_cfg.policy_family, version=ppo_cfg.policy_version,
+                recurrent_seq_len=int(ppo_cfg.recurrent_seq_len),
+            ),
+        )
+        if _recorders is not None:
+            _recorders.append(recorder)
+        recorder.begin_segment(level, "resume" if blob is not None else "start")
+
     train_weights = weights
-    train_step = jax.jit(make_train(env, ppo_cfg, weights))
+    train_step = jax.jit(make_train(env, ppo_cfg, weights, record=recorder is not None))
     # On --resume the rollout is re-initialised, not checkpointed.
     rollout = fresh_rollout(env, start_iter)
     t0 = time.time() - wall_offset
@@ -978,12 +1093,15 @@ def run(
     for it in range(start_iter + 1, train_cfg.iterations + 1):
         key, k_step = jax.random.split(key)
         t_it = time.perf_counter()
-        learner, rollout, metrics = train_step(learner, rollout, k_step)
+        step_out = train_step(learner, rollout, k_step)
+        learner, rollout, metrics = step_out[:3]
         # JAX dispatch is asynchronous, so the iteration is not over until a
         # value is pulled back to the host. This conversion is that sync point,
         # which is why the timer closes after it and not before.
         metrics = {k: float(v) for k, v in metrics.items()}
         it_s = time.perf_counter() - t_it
+        if recorder is not None:
+            recorder.ingest(step_out[3], it)  # host transfer + file I/O, outside the timed step
         if recompiled:
             compile_s.append(it_s)
             recompiled = False
@@ -1163,13 +1281,15 @@ def run(
                 # rebuilding for this alone.
                 red_scales = red_scales_from_cfg(red_cur.apply(env_cfg, level))
                 rollout = fresh_rollout(env, it, red_scales)
+                if recorder is not None:
+                    recorder.begin_segment(level, "curriculum-promotion")
             # `weights` is still a closure over `train_step` (reward annealing
             # is not EnvConfig and so is out of G-4's scope), so it still needs
             # a rebuild when it changes -- which on a real run is most ticks
             # early on and none once `RewardCurriculum.weights_for` saturates.
             if weights != train_weights:
                 train_weights = weights
-                train_step = jax.jit(make_train(env, ppo_cfg, weights))
+                train_step = jax.jit(make_train(env, ppo_cfg, weights, record=recorder is not None))
                 # A rebuild here costs a full XLA compile. Mark the next
                 # iteration so its time is booked as compilation rather than
                 # silently inflating the reported throughput.

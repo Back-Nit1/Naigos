@@ -100,8 +100,14 @@ def run(
     *,
     policy_family="deepsets",
     policy_version="1",
+    recording=None,
+    record_index=None,
 ):
-    """Roll out untrained, trained and the direct-route baseline on IDENTICAL seeds."""
+    """Roll out untrained, trained and the direct-route baseline on IDENTICAL seeds.
+
+    ``recording`` (opt-in) also writes the TRAINED policy's rollouts as a
+    trajectory dataset; the returned summaries are unchanged.
+    """
     cfg = env.cfg
     keys = jax.random.split(jax.random.PRNGKey(seed), n_worlds)
 
@@ -141,8 +147,20 @@ def run(
     ]
     if cfg.resource.enabled:
         policies.append(("reserve_divert_baseline", make_reserve_divert_policy(cfg)))
+    from ..rl import trajectory_recording as trec
+
     for name, pol in policies:
-        final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter)))(keys)
+        record = name == "trained" and trec.is_recording(recording)
+        final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter, record=record)))(keys)
+        if record:
+            trec.record_rollouts(
+                recording, env, traj.pop("evidence"), label="replay-trained", seed=seed, index_path=record_index,
+                policy=trec.policy_record(
+                    "greedy-actor", cfg, family=policy_family, version=policy_version,
+                    artifact_sha256=trec.params_sha256(trained_params), cbf=bool(use_cbf),
+                ),
+                collection={"world_seed": int(seed), "use_cbf": bool(use_cbf)},
+            )
         out[name] = {"summary": _summary(final, traj, cfg), "traj": traj, "final": final}
     return out
 
@@ -414,7 +432,13 @@ def main(argv=None):
     ap.add_argument("--world", type=int, default=0,
                     help="which rolled-out world demo.json logs for the 3D viewer (default 0). "
                          "The summary table always covers every world; this only picks the one drawn.")
+    from ..rl import trajectory_recording as trec
+
+    trec.add_cli_args(ap)
     a = ap.parse_args(argv)
+    recording = trec.config_from_args(a)
+    if recording is not None:
+        recording = recording.resolved(Path(a.out) / "trajectories")
 
     from ..rl.checkpoint import load as load_checkpoint, policy_identity
 
@@ -442,6 +466,7 @@ def main(argv=None):
     results = run(
         env, ck["actor"], a.worlds, a.seed, use_cbf=a.cbf,
         policy_family=identity["family"], policy_version=identity["version"],
+        recording=recording, record_index=Path(a.out) / trec.INDEX_FILENAME,
     )
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)

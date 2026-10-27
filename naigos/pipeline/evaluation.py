@@ -157,14 +157,21 @@ def _to_numpy_trace(traj):
     return out
 
 
-def run_evaluation(env, plan: dict, candidate_params, champion_params=None) -> dict:
-    """Roll every policy on the same held-out keys. Returns metrics and verifier result."""
+def run_evaluation(env, plan: dict, candidate_params, champion_params=None, *,
+                   recording=None, record_index=None) -> dict:
+    """Roll every policy on the same held-out keys. Returns metrics and verifier result.
+
+    ``recording`` (a ``trajectory_recording.RecordingConfig``, off by default)
+    also writes the CANDIDATE's measurement rollouts and its resource-bank
+    scenarios as trajectory datasets; metrics and verifier results are unchanged.
+    """
     import jax
     import jax.numpy as jnp
     import numpy as np
 
     from ..rl import verifier
     from ..rl.ppo import greedy_policy
+    from ..rl import trajectory_recording as trec
     from ..rl.train import baseline_policies, evaluate_resource_bank, rollout_metrics
 
     keys = jnp.concatenate([jax.random.split(jax.random.PRNGKey(int(s)), plan["worlds_per_seed"])
@@ -176,8 +183,16 @@ def run_evaluation(env, plan: dict, candidate_params, champion_params=None) -> d
 
         afilter = make_policy_filter(CBFConfig(), env.cfg)
 
-    def measure(pol) -> dict:
-        final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter)))(keys)
+    def measure(pol, identity=None) -> dict:
+        record = identity is not None and trec.is_recording(recording)
+        final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter, record=record)))(keys)
+        if record:
+            trec.record_rollouts(
+                recording, env, traj.pop("evidence"), label="pipeline-candidate", seed=int(plan["seeds"][0]),
+                policy=identity, index_path=record_index,
+                collection={"seeds": [int(x) for x in plan["seeds"]], "worlds_per_seed": int(plan["worlds_per_seed"]),
+                            "use_cbf": bool(plan["use_cbf"])},
+            )
         return rollout_metrics(final, traj, n, env.cfg.n_blue)
 
     def actor_policy(value):
@@ -188,8 +203,16 @@ def run_evaluation(env, plan: dict, candidate_params, champion_params=None) -> d
         return greedy_policy(value, env.cfg)
 
     cand_pol = actor_policy(candidate_params)
+    cand_id = None
+    if trec.is_recording(recording):
+        loaded = candidate_params if isinstance(candidate_params, LoadedActor) else None
+        cand_id = trec.policy_record(
+            "pipeline-candidate", env.cfg,
+            family=loaded.family if loaded else "deepsets", version=loaded.version if loaded else "1",
+            artifact_sha256=trec.params_sha256(loaded.params if loaded else candidate_params),
+        )
     result = {
-        "candidate": measure(cand_pol),
+        "candidate": measure(cand_pol, cand_id),
         "baselines": {name: measure(pol) for name, pol in baseline_policies(env.cfg).items()},
         "n_episodes": n,
         "device": jax.default_backend(),
@@ -206,7 +229,10 @@ def run_evaluation(env, plan: dict, candidate_params, champion_params=None) -> d
         # Refuses training seeds inside the bank's reserved ranges.
         seeds = plan["training_seeds"]
         result["resource_bank"] = {
-            "candidate": evaluate_resource_bank(env, cand_pol, training_seeds=seeds),
+            "candidate": evaluate_resource_bank(
+                env, cand_pol, training_seeds=seeds, recording=recording, record_policy=cand_id,
+                record_index=record_index,
+            ),
             "baselines": {name: evaluate_resource_bank(env, pol, training_seeds=seeds)
                           for name, pol in baseline_policies(env.cfg).items()},
         }

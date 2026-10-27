@@ -116,6 +116,26 @@ def is_recording(cfg: RecordingConfig | None) -> bool:
     return cfg is not None and cfg.enabled
 
 
+def add_cli_args(parser) -> None:
+    """The shared opt-in flags. Without ``--record-trajectories`` nothing is recorded."""
+    g = parser.add_argument_group("trajectory recording (opt-in, off by default)")
+    g.add_argument("--record-trajectories", nargs="?", const="", default=None, metavar="DIR",
+                   help="write trajectory datasets under DIR (no value: the run/output directory's trajectories/)")
+    g.add_argument("--record-chunk-steps", type=int, default=512, help="records per committed chunk")
+    g.add_argument("--record-prefix", default="", help="dataset id prefix")
+    g.add_argument("--record-max-worlds", type=int, default=None, help="PPO: record only the first N worlds")
+
+
+def config_from_args(args) -> RecordingConfig | None:
+    """None unless the user asked; an empty ``--record-trajectories`` defers the root to the caller."""
+    if args.record_trajectories is None:
+        return None
+    return RecordingConfig(
+        enabled=True, root=args.record_trajectories or None, chunk_steps=args.record_chunk_steps,
+        prefix=args.record_prefix, max_worlds=args.record_max_worlds,
+    )
+
+
 # --------------------------------------------------------------- provenance --
 
 
@@ -127,6 +147,15 @@ def _code_state() -> tuple[str, bool]:
     if not commit or not re.fullmatch(r"[0-9a-f]{7,64}", commit):
         return "0" * 40, True
     return commit, True if info.get("dirty") is None else bool(info["dirty"])
+
+
+def key_words(key) -> list[int]:
+    """The raw uint32 words of a legacy or typed PRNG key, for provenance."""
+    try:
+        data = jax.random.key_data(key)
+    except Exception:
+        data = key
+    return [int(x) for x in np.asarray(data).reshape(-1)]
 
 
 def params_sha256(params: Any) -> str:

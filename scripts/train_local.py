@@ -74,7 +74,11 @@ if __name__ == "__main__":
     ap.add_argument("--override-resume", action="append", default=[], metavar="KEY",
                     help=f"accept one named incompatibility. Keys: "
                          f"{', '.join(runmeta.RESUME_BLOCKING_KEYS)}")
+    from naigos.rl import trajectory_recording as trec
+
+    trec.add_cli_args(ap)
     a = ap.parse_args()
+    recording = trec.config_from_args(a)
     cfg = EnvConfig()
     profile = runmeta.RunProfile(
         name="local-synthetic", purpose="synthetic-terrain smoke test of the training stack",
@@ -94,7 +98,8 @@ if __name__ == "__main__":
     run(
         EnvConfig(),
         PPOConfig(n_envs=a.envs, n_steps=a.steps),
-        TrainConfig(iterations=a.iterations, out_dir=a.out, seed=a.seed, eval_every=10, checkpoint_every=30),
+        TrainConfig(iterations=a.iterations, out_dir=a.out, seed=a.seed, eval_every=10, checkpoint_every=30,
+                    recording=recording),
         meta=meta,
         resume_from=resume_from,
     )
