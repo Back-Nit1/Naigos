@@ -1912,6 +1912,41 @@ wheels = [
 ]
 
 [[package]]
+name = "jsbsim"
+version = "1.2.3"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ff/8e/e3d7f2807591cea9de9e9d2d203da555f8feb0841c26af5859d878494ef4/jsbsim-1.2.3.tar.gz", hash = "sha256:3dcfde05cdf318d83bb99607be2993a33d458b156c076d66979164ef9ed38502", size = 1242735, upload-time = "2025-06-07T19:39:45.38Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/e1/832eaa16876a0f433473fced28e4ec28eb4cd1e3446651ccb22e06e1c62b/jsbsim-1.2.3-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:af1f53a40f953ba18996b4416c9a7360534d8fdfbb80b9c7b8f34b4acac6aa5f", size = 2885074, upload-time = "2025-06-07T19:38:39.143Z" },
+    { url = "https://files.pythonhosted.org/packages/38/3a/1abd95a899e3cb6d65bc1dbf0d438af089c12fca787c16761b27cd262b5c/jsbsim-1.2.3-cp310-cp310-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:e942088cdfda346348401f3b57199aa81a6b4f279cede8aaa457e78fa47539f0", size = 16156029, upload-time = "2025-06-07T19:38:41.473Z" },
+    { url = "https://files.pythonhosted.org/packages/55/ac/c5d9ffc55eff0a07551cd22621bc70fb0eafd9ff6f513369a15f8b1f2065/jsbsim-1.2.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:73378f15f4de0c6ec3c7192fc8a4107aeb5490a93a50c0051b2d230c23fd9bdd", size = 16659390, upload-time = "2025-06-07T19:38:46.744Z" },
+    { url = "https://files.pythonhosted.org/packages/02/47/d6ec1e4ff5dd1d352acd4e8c374f6068882eae87b82919a04b8fdf60036e/jsbsim-1.2.3-cp310-cp310-win_amd64.whl", hash = "sha256:9fe374d3ea9e000d6d34fac55f853b876c1facdac47c9297d8ab94033fcd91c8", size = 1730536, upload-time = "2025-06-07T19:38:49.221Z" },
+    { url = "https://files.pythonhosted.org/packages/9d/c5/272bc7c5fa8351d93113b560a61df9e8bd1804b321cd6644553ef59f95cf/jsbsim-1.2.3-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:c3647af0837f60c45e73ee8216737d9ad9cb2369637692f8f64a475e929cd1c7", size = 2891120, upload-time = "2025-06-07T19:38:50.963Z" },
+    { url = "https://files.pythonhosted.org/packages/07/1f/f81becb892f920a3f202d02ecaa3ab885469ef61e427a9bf57f7c4d50c33/jsbsim-1.2.3-cp311-cp311-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:c36d14b6788fd0bb8c3a5ea35136f897b4abc0550f0337df2a88df1555f4202c", size = 16194565, upload-time = "2025-06-07T19:38:53.21Z" },
+    { url = "https://files.pythonhosted.org/packages/1e/31/58defe1540612c984a3166b54b82aa4965eaa8e5544a5b6fdd8a2d1ffe28/jsbsim-1.2.3-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:88ce7d3f1242e0d0bf7d0dcd5591dd907f3b89a33e81a0c0b8275d168731003d", size = 16704957, upload-time = "2025-06-07T19:38:55.834Z" },
+    { url = "https://files.pythonhosted.org/packages/8c/28/a9a6031cd42e275a17e1dc92c3f9f42bf6731760eb90c156ae8da241390c/jsbsim-1.2.3-cp311-cp311-win_amd64.whl", hash = "sha256:39696ab20ab51cc1d52127511516d19263c0e803e2e9a272c8197f2b622b44b2", size = 1731137, upload-time = "2025-06-07T19:38:57.849Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/20/6511b30f344c68accad664461f65c06117cc9f73ea7be5aa42101d2897fc/jsbsim-1.2.3-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:b3ef14e764e6d184663b726c14b082ad7995e98032884de89d15acf00c208559", size = 2882468, upload-time = "2025-06-07T19:38:59.253Z" },
+    { url = "https://files.pythonhosted.org/packages/8f/63/2605b3ee7127abea59964fd880df343a87488b377bd05edc5ee3dc4d623c/jsbsim-1.2.3-cp312-cp312-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:72c0bdaf43379887ada4855162fa98ed0179349b9e5a322c180132a8b96ec7ec", size = 16159930, upload-time = "2025-06-07T19:39:00.966Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/c3/ac6b54ca2c793e6bbdcc090e2207e29972f6e32a157d18e7b1508f9e3950/jsbsim-1.2.3-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:1408005a60e630b7259209ba9e10a1cbd1cda7342342d688fe439386dc4857d8", size = 16672719, upload-time = "2025-06-07T19:39:04.642Z" },
+    { url = "https://files.pythonhosted.org/packages/ba/fa/04dbdd772a1d1010a1a3267a9711555f3884459cf315b3da6450faac4834/jsbsim-1.2.3-cp312-cp312-win_amd64.whl", hash = "sha256:33c226b952cb13df8b8d30be0a7a8c0189109bd8203e959c3c895af14860e618", size = 1729778, upload-time = "2025-06-07T19:39:06.775Z" },
+    { url = "https://files.pythonhosted.org/packages/c3/ea/46dd030f8b8f3568893e4b086b837d55dc177bb9fc560ce589592ef9e455/jsbsim-1.2.3-cp313-cp313-macosx_10_13_universal2.whl", hash = "sha256:d2025791d853631bbdc40b85543a22fd11da13a15f7f7a62f5c207bc542f4eec", size = 2879527, upload-time = "2025-06-07T19:39:08.592Z" },
+    { url = "https://files.pythonhosted.org/packages/19/4d/0bfa52b7b359fa3cf729bdde0db53fa95ee344e1e0602c254d6da66db439/jsbsim-1.2.3-cp313-cp313-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:2fd25a5ed0b2c6261ee6bc9727847290feb4ca6faf46e07c772550811145f0a6", size = 16150618, upload-time = "2025-06-07T19:39:10.824Z" },
+    { url = "https://files.pythonhosted.org/packages/12/da/69be463f2bc31f48c4f64245cd3ad4b35b69af9fd39adc862339b0a4e712/jsbsim-1.2.3-cp313-cp313-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:21e5441d926f1c778d69d28cac1e5ca88345286e888409b99f17db4004bf88d0", size = 16674399, upload-time = "2025-06-07T19:39:13.472Z" },
+    { url = "https://files.pythonhosted.org/packages/95/f8/51f99318acb71e1c6465ecad72987e10339e9b577093cd85eb040f0bd3ee/jsbsim-1.2.3-cp313-cp313-win_amd64.whl", hash = "sha256:c1afccb5dd943a146b77a677001afedfc8ae8aea667d082d668cd4dfce676397", size = 1729970, upload-time = "2025-06-07T19:39:15.629Z" },
+    { url = "https://files.pythonhosted.org/packages/1f/01/2a7922ca357d5bc97cd5798e38dfb6cc3dffcbed997caceb5d1fbde89949/jsbsim-1.2.3-pp310-pypy310_pp73-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:871929dc17fe9416ed2bec19496939d17cd970894520bea69e56b743dc36758b", size = 15262710, upload-time = "2025-06-07T19:39:25.841Z" },
+    { url = "https://files.pythonhosted.org/packages/3d/3d/652f4966271294c7cc2c075d867ba2213aa909689454af38c622bf407c6c/jsbsim-1.2.3-pp310-pypy310_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:885babbe0aad593fce19dad22a4fed99601cbdaa74bbd475981517e08ef44ff7", size = 15725120, upload-time = "2025-06-07T19:39:28.437Z" },
+    { url = "https://files.pythonhosted.org/packages/8b/6f/1a25491106137a15b9f4c62fbd4447af18696cae51d653f8a05cfdadb761/jsbsim-1.2.3-pp310-pypy310_pp73-win_amd64.whl", hash = "sha256:15ff9f5660187f5c29583243eaccd88d2636d6de20e8a23e6afd3fdf3a05d527", size = 1718927, upload-time = "2025-06-07T19:39:30.48Z" },
+    { url = "https://files.pythonhosted.org/packages/b1/23/3986f27bde00f191fda80062adaf4d5aa33ef2d39b85f06c6c9242c7fbd0/jsbsim-1.2.3-pp311-pypy311_pp73-manylinux_2_17_i686.manylinux2014_i686.whl", hash = "sha256:659f9b4c2094c4c5bf2960a4d81166cf01eaa4c87700ac937599cd6ce92489a3", size = 15265664, upload-time = "2025-06-07T19:39:32.228Z" },
+    { url = "https://files.pythonhosted.org/packages/04/62/46f01a2469b708b7823c48560af1c762a84fbfbcb0cdaddab14fcd6b0f84/jsbsim-1.2.3-pp311-pypy311_pp73-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", hash = "sha256:5364cab56dbaafe7bb35081c006925e48899145a8b3ff5571cca8661c7ab9566", size = 15730802, upload-time = "2025-06-07T19:39:34.621Z" },
+    { url = "https://files.pythonhosted.org/packages/79/bc/7c858a19417dc5f63f8422ffb1f9f0f4638c98a35e972b755dec3f3a7b12/jsbsim-1.2.3-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:2985b160078de99420ca30b144ac9e61df04cd4ed1236d56c09c174f474aabdf", size = 1718848, upload-time = "2025-06-07T19:39:36.655Z" },
+]
+
+[[package]]
 name = "kiwisolver"
 version = "1.5.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2756,6 +2791,7 @@ all = [
     { name = "jax", version = "0.6.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "jax", version = "0.10.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "jax", version = "0.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "jsbsim" },
     { name = "laspy", extra = ["lazrs"] },
     { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "matplotlib", version = "3.11.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -2811,15 +2847,19 @@ rl = [
     { name = "orbax-checkpoint", version = "0.11.39", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "orbax-checkpoint", version = "0.12.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
+validation = [
+    { name = "jsbsim" },
+]
 
 [package.metadata]
 requires-dist = [
     { name = "distrax", marker = "extra == 'rl'", specifier = ">=0.1.5" },
     { name = "flax", marker = "extra == 'rl'", specifier = ">=0.8" },
     { name = "jax", marker = "extra == 'rl'", specifier = ">=0.4.30" },
+    { name = "jsbsim", marker = "extra == 'validation'", specifier = "==1.2.3" },
     { name = "laspy", extras = ["lazrs"], marker = "extra == 'research'", specifier = ">=2.5" },
     { name = "matplotlib", marker = "extra == 'demo'", specifier = ">=3.8" },
-    { name = "naigos", extras = ["research", "data", "rl", "demo", "dev"], marker = "extra == 'all'" },
+    { name = "naigos", extras = ["research", "data", "rl", "demo", "validation", "dev"], marker = "extra == 'all'" },
     { name = "numpy", specifier = ">=1.24" },
     { name = "numpy", marker = "extra == 'data'", specifier = ">=1.24" },
     { name = "optax", marker = "extra == 'rl'", specifier = ">=0.2" },
@@ -2832,7 +2872,7 @@ requires-dist = [
     { name = "requests", marker = "extra == 'research'", specifier = ">=2.31" },
     { name = "xarray", marker = "extra == 'research'", specifier = ">=2023.1" },
 ]
-provides-extras = ["research", "data", "rl", "demo", "dev", "all"]
+provides-extras = ["research", "data", "rl", "demo", "validation", "dev", "all"]
 
 [[package]]
 name = "narwhals"
