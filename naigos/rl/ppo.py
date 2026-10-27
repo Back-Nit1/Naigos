@@ -112,6 +112,23 @@ def masked_mean(x, mask):
     return jnp.sum(jnp.where(mask, x, 0.0)) / jnp.maximum(jnp.sum(mask), 1)
 
 
+def active_agent_mask(state) -> jax.Array:
+    """Agents eligible to contribute one transition to an on-policy update.
+
+    Arrival, safe diversion, and physical loss are all per-agent terminal
+    states even when another aircraft keeps the shared world running. Keeping
+    this definition outside the feedforward collector gives recurrent
+    collectors one terminal convention to reuse without coupling their hidden
+    state implementation to this code path.
+    """
+    return state.alive & ~state.reached & ~state.resource.diverted
+
+
+def completed_agent_mask(live: jax.Array, agent_done: jax.Array) -> jax.Array:
+    """First terminal transition only, excluding repeated frozen samples."""
+    return live & agent_done
+
+
 def init_learner(key, cfg: EnvConfig, ppo: PPOConfig, sample_obs: Observation) -> Learner:
     k_a, k_c = jax.random.split(key)
     actor = nets.Actor(cfg)
@@ -197,12 +214,16 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
                 v, vc = critic_per_agent(learner.critic.params, gs)
                 # Recorded BEFORE the step, so the step on which an aircraft is
                 # killed or arrives is live; every later sample of it is not.
-                live = st.alive & ~st.reached
+                live = active_agent_mask(st)
                 st2, ob2, terms, done, info = env.step(st, act)
-                r = compute_reward(terms, weights)
-                c = constraint_cost(terms)
+                # The first terminal step remains live. Frozen samples after a
+                # per-agent terminal state carry no reward, cost, or gradient.
+                r = compute_reward(terms, weights, alive_mask=live)
+                c = constraint_cost(terms) * live.astype(jnp.float32)
                 # The max_steps timeout is treated as terminal (not bootstrapped).
-                agent_done = (info["agent_done"] | done).astype(jnp.float32)
+                agent_done_bool = info["agent_done"] | done
+                agent_done = agent_done_bool.astype(jnp.float32)
+                completed = completed_agent_mask(live, agent_done_bool).astype(jnp.float32)
                 # auto-reset: a finished world starts a fresh episode in place
                 # Carry the ending episode's own red_scales forward (next-steps.md
                 # G-4): a mid-rollout auto-reset must respawn at the level the
@@ -212,7 +233,8 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
                 out = dict(
                     ego=ob.ego, threats=ob.threats, threat_mask=ob.threat_mask,
                     friends=ob.friends, friend_mask=ob.friend_mask,
-                    gs=gs, raw=raw, logp=lp, v=v, vc=vc, r=r, c=c, d=agent_done, live=live,
+                    gs=gs, raw=raw, logp=lp, v=v, vc=vc, r=r, c=c, d=agent_done,
+                    live=live, completed=completed,
                     shot=terms.shotdown, arrived=terms.arrived, exposure=terms.exposure,
                     progress=terms.progress, reset=done.astype(jnp.float32),
                 )
@@ -274,7 +296,7 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
         # already dead/arrived is not a new episode ending.
         live = traj["live"]
         cost_accum = learner.cost_accum + jnp.sum(traj["c"] * live)
-        episode_accum = learner.episode_accum + jnp.sum(traj["d"] * live)
+        episode_accum = learner.episode_accum + jnp.sum(traj["completed"])
         j_cost = jnp.where(episode_accum > 0, cost_accum / jnp.maximum(episode_accum, 1.0), 0.0)
         violation = j_cost - ppo.cost_budget
 
