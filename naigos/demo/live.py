@@ -339,6 +339,7 @@ class Counters:
     terrain: int = 0
     bounds: int = 0
     fuel: int = 0
+    diverted: int = 0  # L1 safe recoveries; finished, but not objectives reached
 
     # the layout being flown now, and the last PER_LAYOUT_KEEP closed ones
     layout: dict = field(default_factory=lambda: Counters._new_layout(1))
@@ -362,20 +363,23 @@ class Counters:
         return {**t, "sim_seconds": round(t["sim_seconds"], 1),
                 "success_rate": round(t["reached"] / t["finished"], 4) if t["finished"] else None}
 
-    def record(self, reached=0, shot_down=0, terrain=0, bounds=0, fuel=0) -> None:
+    def record(self, reached=0, shot_down=0, terrain=0, bounds=0, fuel=0, diverted=0) -> None:
         """One step's outcomes, into the cumulative tally and the current layout's."""
         self.reached += reached
         self.shot_down += shot_down
         self.terrain += terrain
         self.bounds += bounds
         self.fuel += fuel
+        self.diverted += diverted
         t = self.layout
         t["reached"] += reached
         t["shot_down"] += shot_down
         t["terrain"] += terrain
         t["bounds"] += bounds
         t["fuel"] += fuel
-        t["finished"] += reached + shot_down + terrain + bounds + fuel
+        if diverted:  # L1 only: the published baseline-v0 layout keys stay exactly as they were
+            t["diverted"] = t.get("diverted", 0) + diverted
+        t["finished"] += reached + shot_down + terrain + bounds + fuel + diverted
 
     def tick(self, dt: float) -> None:
         self.layout["sim_seconds"] += dt
@@ -396,7 +400,7 @@ class Counters:
 
     def as_dict(self) -> dict:
         lost = self.shot_down + self.terrain + self.bounds + self.fuel
-        done = self.reached + lost
+        done = self.reached + lost + self.diverted
         return {
             "sorties_launched": self.sorties,
             "objectives_reached": self.reached,
@@ -404,6 +408,7 @@ class Counters:
             "terrain_losses": self.terrain,
             "bounds_losses": self.bounds,
             "fuel_losses": self.fuel,
+            "safe_diversions": self.diverted,
             "success_rate": round(self.reached / done, 3) if done else None,
             "current_layout": self._layout_view(self.layout),
             "per_layout": [self._layout_view(t) for t in self.recent_layouts],
@@ -504,6 +509,10 @@ class Simulation:
         self.key = jax.random.PRNGKey(self.seed)
         self.key, k0 = jax.random.split(self.key)
         self.state, self.obs = self.env.reset(k0)
+        initial_memory = getattr(self.policy, "initial_memory", None)
+        self.policy_memory = (
+            None if initial_memory is None else jnp.array(initial_memory)
+        )
         self.counters.sorties = cfg.n_blue
         self.sim_t = 0.0
 
@@ -514,7 +523,9 @@ class Simulation:
             self._afilter = make_policy_filter(CBFConfig(), cfg)
 
         # jit once, up front, so the first frame is not a 2 s stall
-        self._step = jax.jit(self._raw_step)
+        self._step = jax.jit(
+            self._raw_step if self.policy_memory is None else self._raw_recurrent_step
+        )
         self._respawn = jax.jit(self.env.respawn)
         self._reroll = jax.jit(self.env.reroll_threats)
         self._next_reroll = self.reroll_s
@@ -537,6 +548,31 @@ class Simulation:
         state2, obs2, terms, done, info = self.env.step(state, action)
         return state2, obs2, terms, info, feasible, k_next
 
+    def _raw_recurrent_step(self, state, obs, memory, key):
+        k_pol, k_next = jax.random.split(key)
+        action, memory = self.policy(obs, k_pol, memory)
+        feasible = jnp.ones((self.env.cfg.n_blue,), dtype=bool)
+        if self._afilter is not None:
+            action, feasible = self._afilter(state, obs, action)
+        state2, obs2, terms, done, info = self.env.step(state, action)
+        memory = jnp.where(
+            (info["agent_done"] | done)[..., None],
+            jnp.zeros_like(memory), memory,
+        )
+        return state2, obs2, memory, terms, info, feasible, k_next
+
+    def _reset_policy_memory(self, done_mask=None):
+        """Clear GRU state at sortie or complete world-layout boundaries."""
+        if self.policy_memory is None:
+            return
+        if done_mask is None:
+            self.policy_memory = jnp.zeros_like(self.policy_memory)
+        else:
+            self.policy_memory = jnp.where(
+                jnp.asarray(done_mask, dtype=bool)[..., None],
+                jnp.zeros_like(self.policy_memory), self.policy_memory,
+            )
+
     # ------------------------------------------------------------------ loop
     def run(self):
         cfg = self.env.cfg
@@ -546,7 +582,14 @@ class Simulation:
         while not self._stop.is_set():
             self.key, k = jax.random.split(self.key)
             state_before = self.state
-            state2, obs2, terms, info, feasible, _ = self._step(self.state, self.obs, k)
+            if self.policy_memory is None:
+                state2, obs2, terms, info, feasible, _ = self._step(
+                    self.state, self.obs, k
+                )
+            else:
+                state2, obs2, self.policy_memory, terms, info, feasible, _ = self._step(
+                    self.state, self.obs, self.policy_memory, k
+                )
 
             t = jax.device_get(terms)
             # Counted before any reroll below, so a step's outcomes belong to
@@ -557,6 +600,7 @@ class Simulation:
                 terrain=int(np.asarray(t.terrain_violation).sum()),
                 bounds=int(np.asarray(t.bounds_violation).sum()),
                 fuel=int(np.asarray(t.out_of_fuel).sum()),
+                diverted=int(np.asarray(t.diverted).sum()),
             )
             self.counters.tick(cfg.dt)
 
@@ -572,6 +616,7 @@ class Simulation:
                 self.key, kr = jax.random.split(self.key)
                 self.state = self._respawn(self.state, kr, jnp.asarray(done_mask))
                 self.obs = self.env.observe(self.state)
+                self._reset_policy_memory(done_mask)
                 self.counters.sorties += int(done_mask.sum())
                 # a new sortie: nothing from the old one can be emitted again
                 self.events.retask(done_mask)
@@ -580,6 +625,9 @@ class Simulation:
                 self.key, kt = jax.random.split(self.key)
                 self.state = self._reroll(self.state, kt)
                 self.obs = self.env.observe(self.state)
+                # A newly sampled threat world must not inherit hidden features
+                # about the layout it replaced.
+                self._reset_policy_memory()
                 self._next_reroll += self.reroll_s
                 self.threat_draws += 1
                 self.counters.close_layout()
@@ -1502,7 +1550,12 @@ def main(argv=None) -> int:
     ckpt = Path(a.checkpoint)
     if not ckpt.exists():
         raise SystemExit(f"{ckpt} not found. Train one, or use the shipped checkpoints/theatre_1000")
-    from ..rl.checkpoint import load as load_checkpoint, obs_config_from_blob, require_actor_ego_dim
+    from ..rl.checkpoint import (
+        load as load_checkpoint,
+        obs_config_from_blob,
+        policy_kwargs,
+        require_actor_ego_dim,
+    )
 
     blob = load_checkpoint(ckpt)
     params = blob["actor"]
@@ -1513,7 +1566,7 @@ def main(argv=None) -> int:
     env = NaigosEnv(cfg, hmap=hmap)
     sim = Simulation(
         env=env,
-        policy=greedy_policy(params, cfg),
+        policy=greedy_policy(params, cfg, **policy_kwargs(blob)),
         georef=GeoRef(**notes["georef"]),
         speed=a.speed,
         use_cbf=a.cbf,

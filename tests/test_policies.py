@@ -94,11 +94,56 @@ def test_future_family_names_do_not_silently_fall_back_to_deepsets():
         policies.PolicyFamily.NUMERIC_TRANSFORMER,
         policies.PolicyFamily.SCRIPTED,
     }
-    assert policies.registered_policies() == ((policies.PolicyFamily.DEEPSETS, "1"),)
+    assert policies.registered_policies() == (
+        (policies.PolicyFamily.DEEPSETS, "1"),
+        (policies.PolicyFamily.RECURRENT, "1"),
+    )
     for family in (
-        policies.PolicyFamily.RECURRENT,
         policies.PolicyFamily.NUMERIC_TRANSFORMER,
         policies.PolicyFamily.SCRIPTED,
     ):
         with pytest.raises(policies.PolicyNotRegisteredError, match="not registered"):
             policies.create_actor(CFG, family=family)
+
+
+def test_recurrent_actor_spec_memory_and_concrete_parameter_count():
+    actor = policies.create_actor(CFG, family=policies.PolicyFamily.RECURRENT)
+    memory = policies.initial_memory(CFG, family=policies.PolicyFamily.RECURRENT)
+    variables = actor.init(jax.random.PRNGKey(9), *_inputs(), memory)
+    spec = policies.get_policy_spec(CFG, family=policies.PolicyFamily.RECURRENT)
+    assert type(actor) is networks.RecurrentActor
+    assert memory.shape == (CFG.n_blue, policies.RECURRENT_HIDDEN)
+    assert spec.parameter_count == policies.count_parameters(variables["params"])
+    assert spec.memory_requirements.recurrent
+    assert spec.memory_requirements.persistent_bytes_per_agent == 128 * 4
+    assert spec.checkpoint_parameter_key == "actor"
+    assert len(spec.sha256) == 64
+    assert spec.to_dict()["family"] == "recurrent"
+
+
+def test_recurrent_actor_updates_explicit_memory_and_keeps_three_controls():
+    actor = policies.create_actor(CFG, family="recurrent")
+    inputs = _inputs()
+    memory = policies.initial_memory(CFG, family="recurrent")
+    variables = actor.init(jax.random.PRNGKey(10), *inputs, memory)
+    mean, log_std, next_memory = actor.apply(variables, *inputs, memory)
+    assert mean.shape == log_std.shape == (CFG.n_blue, 3)
+    assert next_memory.shape == memory.shape
+    assert not np.array_equal(np.asarray(next_memory), np.asarray(memory))
+    assert policies.initial_memory(CFG) is None
+
+
+def test_recurrent_actor_is_permutation_invariant_over_threat_slots():
+    actor = policies.create_actor(CFG, family="recurrent")
+    ego, threats, mask, friends, friend_mask = _inputs()
+    memory = policies.initial_memory(CFG, family="recurrent")
+    variables = actor.init(
+        jax.random.PRNGKey(11), ego, threats, mask, friends, friend_mask, memory
+    )
+    order = jnp.array([2, 0, 3, 1])
+    a = actor.apply(variables, ego, threats, mask, friends, friend_mask, memory)
+    b = actor.apply(
+        variables, ego, threats[:, order], mask[:, order], friends, friend_mask, memory
+    )
+    for actual, expected in zip(a, b):
+        np.testing.assert_allclose(np.asarray(actual), np.asarray(expected), atol=1e-6)

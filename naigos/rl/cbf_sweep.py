@@ -443,6 +443,7 @@ def env_config_from_blob(blob: dict, **overrides) -> EnvConfig:
     from ..env.config import (
         AirframeConfig,
         DetectionConfig,
+        ResourceWorldConfig,
         SpatialHashConfig,
         TerrainConfig,
         ThreatKindConfig,
@@ -454,6 +455,7 @@ def env_config_from_blob(blob: dict, **overrides) -> EnvConfig:
         "detection": DetectionConfig,
         "terrain": TerrainConfig,
         "hash": SpatialHashConfig,
+        "resource": ResourceWorldConfig,
     }
     kw: dict = {}
     for name, klass in nested.items():
@@ -471,6 +473,9 @@ def env_config_from_blob(blob: dict, **overrides) -> EnvConfig:
 
     top = {f.name for f in dataclasses.fields(EnvConfig)}
     kw.update({k: v for k, v in stored.items() if k in top})
+    # Checkpoint metadata, not the stored dict, is the resource authority: it
+    # restores tuple fields and refuses a model/config disagreement.
+    kw["resource"] = ckpt_mod.resource_config_from_blob(blob)
     kw.update(overrides)
     return EnvConfig(**kw)
 
@@ -514,6 +519,7 @@ def checkpoint_provenance(path: str | os.PathLike, blob: dict) -> dict:
         "red_level_at_checkpoint": blob.get("red_level"),
         "trained_env_cfg": json.loads(json.dumps(blob.get("env_cfg"), default=str, sort_keys=True)),
         "obs_config": ckpt_mod.obs_config_from_blob(blob),
+        "policy": ckpt_mod.policy_identity(blob),
     }
 
 
@@ -578,7 +584,8 @@ def run_sweep(
             base_env_cfg = base_env_cfg.replace(**env_overrides)
         require_actor_compatible(blob["actor"], base_env_cfg, str(path))
         actor = blob["actor"]
-        make_policy = lambda cfg: greedy_policy(actor, cfg)  # noqa: E731
+        policy_kw = ckpt_mod.policy_kwargs(blob)
+        make_policy = lambda cfg: greedy_policy(actor, cfg, **policy_kw)  # noqa: E731
         policy_provenance = {"kind": "checkpoint", **checkpoint_provenance(path, blob)}
     else:
         if policy_provenance is None:

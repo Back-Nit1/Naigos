@@ -108,6 +108,36 @@ class Actor(nn.Module):
         return mean, jnp.broadcast_to(log_std, mean.shape)
 
 
+class RecurrentActor(nn.Module):
+    """DeepSets observation encoder followed by one GRU state per aircraft.
+
+    The recurrent state is an explicit argument/result.  Nothing is cached in
+    the Linen module, which keeps evaluation, checkpointing and reset semantics
+    visible to callers and safe under ``jit``/``vmap``.
+    """
+
+    cfg: EnvConfig
+    hidden: int = 128
+
+    @nn.compact
+    def __call__(self, ego, threats, threat_mask, friends, friend_mask, memory):
+        t = SetEncoder(name="threat_encoder")(threats, threat_mask, ego)
+        f = SetEncoder(name="friend_encoder", attention=False)(friends, friend_mask, ego)
+        z = jnp.concatenate([ego, t, f], axis=-1)
+        z = nn.tanh(nn.Dense(self.hidden, name="input_projection")(z))
+        memory, z = nn.GRUCell(features=self.hidden, name="gru")(memory, z)
+        z = nn.tanh(nn.Dense(self.hidden, name="head")(z))
+        mean = nn.Dense(
+            self.cfg.action_dim,
+            kernel_init=nn.initializers.orthogonal(0.01),
+            name="mean",
+        )(z)
+        log_std = self.param(
+            "log_std", nn.initializers.constant(-0.5), (self.cfg.action_dim,)
+        )
+        return mean, jnp.broadcast_to(log_std, mean.shape), memory
+
+
 class Critic(nn.Module):
     """Centralized value function. Training time only.
 

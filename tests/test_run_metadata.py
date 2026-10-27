@@ -143,6 +143,8 @@ def test_metadata_records_the_configuration_and_the_commit(tmp_path):
     assert meta["config"]["aoi"] == "owens_valley"
     assert meta["config"]["synthetic"] is False
     assert meta["config"]["total_env_steps"] > 0
+    assert meta["config"]["policy_family"] == "deepsets"
+    assert meta["config"]["policy_version"] == "1"
     assert meta["code"]["commit"] == "abc"
     assert re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z", meta["created_utc"])
 
@@ -175,6 +177,12 @@ def test_a_different_commit_is_also_a_collision(tmp_path):
     rm.write_metadata(tmp_path, _meta())
     with pytest.raises(rm.RunCollision, match="code"):
         rm.write_metadata(tmp_path, _meta(code={"commit": "def", "dirty": False}))
+
+
+def test_policy_family_is_part_of_immutable_run_identity(tmp_path):
+    rm.write_metadata(tmp_path, _meta())
+    with pytest.raises(rm.RunCollision, match="config"):
+        rm.write_metadata(tmp_path, _meta(policy_family="recurrent"))
 
 
 def test_a_different_device_is_not_a_collision(tmp_path):

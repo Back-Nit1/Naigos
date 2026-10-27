@@ -377,3 +377,25 @@ def test_verified_smoke_gate_requires_exact_clean_provenance():
         },
         CODE["commit"],
     ) is None
+
+
+@pytest.mark.parametrize(
+    "family,resource,submittable",
+    [
+        ("deepsets", {"name": "baseline-v0", "config": {}}, True),
+        ("recurrent", {"name": "baseline-v0", "config": {}}, False),
+        ("deepsets", {"name": "resource-world-v1", "config": {"endurance": True}}, False),
+        ("recurrent", {"name": "resource-world-v1", "config": {"endurance": True}}, False),
+    ],
+)
+def test_modal_submission_stays_closed_for_every_gru_or_resource_cell(family, resource, submittable):
+    plan = em.build_plan(_config(
+        theatres=["owens_valley"], seeds=[0],
+        policies=[{"family": family, "version": "1"}], resources=[resource],
+        hyperparameters=[{"name": "default", "profile_overrides": {}}],
+    ), code=CODE)
+    exp = plan["experiments"][0]
+    assert (not em.submission_problems(exp)) is submittable
+    if not submittable:
+        with pytest.raises(em.MatrixError):
+            em.remote_spec(exp)

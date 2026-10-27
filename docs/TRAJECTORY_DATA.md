@@ -1,9 +1,12 @@
 # Trajectory data specification
 
-Status: **implemented format version 1.0.0 / schema version 1.0.0**. This
-document describes storage and validation primitives only. No PPO collector,
-training loop, checkpoint, controller, or reported result reads or writes this
-format yet.
+Status: **implemented format version 1.0.0 / schema version 1.0.0**, and
+**collection is implemented**: opt-in recorders write this format from the PPO
+collector, the evaluators, the route and resource banks, the pipeline evaluator
+and the demo replay (see [Collection](#collection-from-real-naigos-rollouts)).
+Recording is off by default. **Nothing here consumes the data yet**: no
+behavior cloning, offline RL, transformer or language-model training has been
+done, and no result in this repository comes from this data.
 
 ## Purpose and boundary
 
@@ -226,6 +229,120 @@ bytes, actor inputs, or PPO. A future trajectory migration must be an explicit
 read-old/write-new tool with tests that preserve record counts, provenance,
 and source content hashes.
 
+## Collection from real Naigos rollouts
+
+Implemented in `naigos/rl/trajectory_recording.py` (the JAX/environment
+adapter; `naigos/trajectory/` itself still imports only NumPy and the standard
+library, and a test enforces it).
+
+### Opt-in configuration
+
+`RecordingConfig(enabled=False, root=None, chunk_steps=512, prefix="",
+description="", max_worlds=None, theatre=None)`. The default records nothing:
+no files, no extra host transfers, no RNG or action change, and bit-identical
+training and evaluation results (tests compare parameters, histories and
+metrics with recording absent, disabled and enabled).
+
+| entry point | how to enable | what is written |
+| --- | --- | --- |
+| `train.run(...)` | `TrainConfig(recording=RecordingConfig(enabled=True, ...))`; `scripts/train_local.py --record-trajectories [DIR]` | the PPO collector's own rollouts, one dataset per interleaved world; index at `<out_dir>/trajectory_index.json`, default root `<out_dir>/trajectories` |
+| `train.evaluate` | `recording=`, `record_index=` | one dataset, world *w* = episode *w* |
+| `train.evaluate_route_bank` | `recording=`, `record_policy=` | one dataset per bank scenario (one route and seed each) |
+| `train.evaluate_resource_bank` | `recording=`, `record_policy=` | one dataset per scenario, under that scenario's realized resource config |
+| `pipeline.evaluation.run_evaluation` | `recording=` | the candidate's measurement rollouts and resource-bank scenarios |
+| `demo.replay.run` / `python -m naigos.demo.replay` | `recording=`; `--record-trajectories` | the trained policy's rollouts (baselines are not recorded) |
+
+Shared CLI flags: `--record-trajectories [DIR]`, `--record-chunk-steps N`,
+`--record-prefix P`, `--record-max-worlds N` (PPO only). Scripted baselines
+(`train.baseline`) and the Modal path are not recorded; the Modal matrix gates
+are unchanged and still fail closed for GRU/resource cells.
+
+### The collection boundary
+
+Evidence is captured inside the compiled rollout, at the actor -> optional CBF
+-> `env.step` boundary (`NaigosEnv.evidence_frame`), from values the step
+already computed. There is no extra environment step and no I/O inside `jit`,
+`vmap` or `scan`. When enabled, the evidence is returned from the compiled
+program once per rollout or PPO segment, moved with one `jax.device_get`,
+converted to canonical NumPy and appended in chunks of exactly `chunk_steps`
+records. Memory is bounded by `chunk_steps` per open shard.
+
+`NaigosEnv.rollout` now keeps both actions in its trace: `action_requested`
+(policy), `action_executed` (after the CBF) and the historical `action`, which
+remains an alias of the executed action for existing consumers (the verifier
+reads it). PPO has no CBF, so a PPO record has requested == executed,
+feasible = true and intervention 0; with no filter in an evaluation the same
+holds exactly.
+
+### What a record holds
+
+Core fields are unchanged from schema 1.0.0. Additions are explicit
+extensions, present in the schema (hence required in every chunk) only where
+they apply:
+
+| field | when | meaning |
+| --- | --- | --- |
+| `observation/ego` | always | the base 10/14-feature ego block |
+| `resource/observation` | L1 | the appended L1 block the actor also receives; `concat(ego, resource/observation)` is the exact actor input |
+| `reward/diverted`, `resource/outcome`, `resource/diverted` | always | raw `RewardTerms.diverted`, the environment's exclusive outcome code (0-7, env precedence shot > terrain > bounds > fuel > primary > diverted > timeout), post-step diversion state |
+| `resource/reserve_fuel`, `initial_fuel`, `diversion_pos`, `diversion_active` | L1 | absolute episode resource values and the recovery gates |
+| `privileged/burn_multiplier` | L1 | the TRUE burn multiplier -- audit only, never an actor input (the actor sees a declared nominal estimate) |
+| `extension/route` | always | realized `[bearing, family id, legacy flag]` |
+| `extension/collection_iteration` | always | training iteration / evaluation tag |
+| `extension/memory_before`, `memory_after`, `memory_reset` | recurrent | GRU memory into the action, out of it after lifecycle resets, and where the lifecycle zeroed it (arrival, death, diversion, timeout, world reset) |
+
+`status/termination_cause` keeps the schema precedence
+(`terrain > out_of_bounds > shot_down > reached`), then L1 `out_of_fuel`
+(terminal only under L1; in baseline-v0 exhaustion is a repeated cost and no
+termination), then a safe diversion, recorded as code 255 (`other`) and fully
+described by `resource/outcome == 2`, then `timeout` for an aircraft still
+active when its world's step budget ends. The environment's own exclusive
+outcome (`resource/outcome`) uses a different precedence (shot ahead of terrain)
+and is stored beside it rather than merged, so neither is reinterpreted. Steps a
+world spends frozen after every aircraft is done are not recorded; steps after
+one aircraft's terminal event (while others fly) carry no new cause, because the
+environment gates every event on the aircraft not already being frozen. Validation
+enforces this at write time and again on read.
+
+### Shards and provenance
+
+One dataset never mixes identities (theatre, route, scenario, seed, policy,
+environment, resource, code), because those live once in its immutable
+metadata. Layouts that satisfy the writer's strict episode-order contract:
+
+- evaluation: one dataset per rollout batch; world *w* is episode *w*;
+  route/resource banks: one dataset per scenario;
+- PPO: a batch interleaves worlds, so every world is its own shard
+  (`train-s<session>g<segment>-w<world>`). Episode ids, step indices and
+  reset markers are computed on the host from the environment's `done` flags;
+- a **session** is one `run()` call. A resume starts a new session: the
+  restarted rollout is not the interrupted one, so it never continues an old
+  episode. A **segment** ends and a new one begins when a curriculum promotion
+  re-initialises the rollout; the old shards are finalized (they may end
+  mid-episode, which their description says);
+- provenance records the git commit and dirty flag (all-zero commit + dirty
+  when no checkout is available), the full environment configuration and
+  digest, terrain label (`synthetic-terrain` or `dem-<hash>`), the observation
+  and actor schema ids, the resource-bank protocol and digest (L1), the policy
+  family/version/specification digest, resource configuration, the actor
+  parameter SHA-256 for evaluation of a given checkpoint, and collection
+  details (rollout key words, world counts, session, segment, red level). A
+  PPO shard's policy is the *online learner*, so it carries no artifact hash.
+
+### Completion, interruption, index
+
+Shards are finalized only after collection succeeds, then reopened through
+`TrajectoryReader` (every chunk is validated) and cross-checked against the
+writer's report. Any exception leaves the open datasets partial -- no
+`manifest.json`, no content hash -- and propagates. A finalized path is never
+overwritten or appended to (`ImmutableDatasetError`).
+
+`trajectory_index.json` (protocol `naigos-trajectory-index-v1`) is replaced
+atomically (temp file, fsync, `os.replace`) and lists, per dataset: path,
+`complete`, record and chunk counts, metadata SHA-256, provenance and
+environment digests, and `content_sha256` -- `null` for any partial dataset. An
+entry that is finalized cannot be downgraded to partial.
+
 ## What is measured and what is proposed
 
 Implemented and tested here: schema construction, strict NumPy validation,
@@ -233,7 +350,14 @@ chunked NPZ round trips, immutable metadata, per-chunk and whole-dataset
 hashing, corruption rejection, version rejection, partial recognition, and
 clean partial resume.
 
+Also implemented and tested: collection from real rollouts for all four
+policy x resource cells (DeepSets/GRU x baseline-v0/L1 endurance), with and
+without a CBF; default-off equivalence; bounded multi-chunk writing; writer
+interruption; resume sessions; reconstruction of requested actions from the
+checkpointed actor, recorded observations and recorded memory.
+
 Not measured or claimed: compression ratio, collector throughput, recommended
-chunk size, behavior-cloning accuracy, or offline policy performance. PPO
-collection and any PyTorch planner are future integrations; this format only
-establishes their shared data boundary.
+chunk size, behavior-cloning accuracy, or offline policy performance. **Offline
+training of any kind is future work**: no behavior cloning, offline RL,
+transformer or language-model training exists, and nothing here is evidence of
+real-aircraft readiness -- Naigos remains a simulation and research system.

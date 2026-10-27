@@ -476,6 +476,15 @@ change the learning objective and require a curated offline trajectory dataset,
 so it would not answer whether temporal attention improves the current online
 policy.
 
+## Trajectory recording status
+
+The data boundary this section's offline options need now exists: DeepSets and
+GRU rollouts, with or without a CBF, in baseline-v0 or L1 endurance, can be
+recorded to `naigos.trajectory` datasets (`docs/TRAJECTORY_DATA.md`). Recurrent
+policies add explicit `extension/memory_*` fields. This is collection only; the
+behavior-cloning, transformer and language-planner options above remain
+unimplemented and unmeasured.
+
 ## Recommended next integration step
 
 Finish and merge only the backward-compatible policy metadata seam first:

@@ -118,7 +118,7 @@ def _terms(arrived=0, shot=0):
     a[:arrived] = 1.0
     s[:shot] = 1.0
     return SimpleNamespace(shotdown=s, terrain_violation=z, bounds_violation=z,
-                           out_of_fuel=z, arrived=a, exposure=z)
+                           out_of_fuel=z, arrived=a, exposure=z, diverted=z)
 
 
 def test_an_outcome_on_the_reroll_step_belongs_to_the_layout_active_during_it():

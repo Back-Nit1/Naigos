@@ -25,6 +25,7 @@ rest of the package stays importable (and testable) without it.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from pathlib import Path
 
@@ -103,11 +104,24 @@ def checkpoint_entry(path: str | Path) -> dict:
             "iteration": runmeta.checkpoint_iteration(path)}
 
 
-def load_actor_params(path: str | Path):
-    """The actor parameters, where the demo has always read them."""
+@dataclasses.dataclass(frozen=True)
+class LoadedActor:
+    params: object
+    family: str = "deepsets"
+    version: str = "1"
+
+
+def load_actor_params(path: str | Path) -> LoadedActor:
+    """Actor parameters plus the checkpoint's deployable policy identity."""
     from ..rl import checkpoint as ck
 
-    return ck.load(path)["actor"]
+    blob = ck.load(path)
+    identity = ck.policy_identity(blob)
+    return LoadedActor(
+        params=blob["actor"],
+        family=identity["family"],
+        version=identity["version"],
+    )
 
 
 # --- the JAX part ------------------------------------------------------------------
@@ -143,15 +157,22 @@ def _to_numpy_trace(traj):
     return out
 
 
-def run_evaluation(env, plan: dict, candidate_params, champion_params=None) -> dict:
-    """Roll every policy on the same held-out keys. Returns metrics and verifier result."""
+def run_evaluation(env, plan: dict, candidate_params, champion_params=None, *,
+                   recording=None, record_index=None) -> dict:
+    """Roll every policy on the same held-out keys. Returns metrics and verifier result.
+
+    ``recording`` (a ``trajectory_recording.RecordingConfig``, off by default)
+    also writes the CANDIDATE's measurement rollouts and its resource-bank
+    scenarios as trajectory datasets; metrics and verifier results are unchanged.
+    """
     import jax
     import jax.numpy as jnp
     import numpy as np
 
     from ..rl import verifier
     from ..rl.ppo import greedy_policy
-    from ..rl.train import BASELINE_POLICIES, rollout_metrics
+    from ..rl import trajectory_recording as trec
+    from ..rl.train import baseline_policies, evaluate_resource_bank, rollout_metrics
 
     keys = jnp.concatenate([jax.random.split(jax.random.PRNGKey(int(s)), plan["worlds_per_seed"])
                             for s in plan["seeds"]])
@@ -162,33 +183,90 @@ def run_evaluation(env, plan: dict, candidate_params, champion_params=None) -> d
 
         afilter = make_policy_filter(CBFConfig(), env.cfg)
 
-    def measure(pol) -> dict:
-        final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter)))(keys)
+    def measure(pol, identity=None) -> dict:
+        record = identity is not None and trec.is_recording(recording)
+        final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter, record=record)))(keys)
+        if record:
+            trec.record_rollouts(
+                recording, env, traj.pop("evidence"), label="pipeline-candidate", seed=int(plan["seeds"][0]),
+                policy=identity, index_path=record_index,
+                collection={"seeds": [int(x) for x in plan["seeds"]], "worlds_per_seed": int(plan["worlds_per_seed"]),
+                            "use_cbf": bool(plan["use_cbf"])},
+            )
         return rollout_metrics(final, traj, n, env.cfg.n_blue)
 
-    cand_pol = greedy_policy(candidate_params, env.cfg)
+    def actor_policy(value):
+        if isinstance(value, LoadedActor):
+            return greedy_policy(
+                value.params, env.cfg, family=value.family, version=value.version
+            )
+        return greedy_policy(value, env.cfg)
+
+    cand_pol = actor_policy(candidate_params)
+    cand_id = None
+    if trec.is_recording(recording):
+        loaded = candidate_params if isinstance(candidate_params, LoadedActor) else None
+        cand_id = trec.policy_record(
+            "pipeline-candidate", env.cfg,
+            family=loaded.family if loaded else "deepsets", version=loaded.version if loaded else "1",
+            artifact_sha256=trec.params_sha256(loaded.params if loaded else candidate_params),
+        )
     result = {
-        "candidate": measure(cand_pol),
-        "baselines": {name: measure(pol) for name, pol in BASELINE_POLICIES.items()},
+        "candidate": measure(cand_pol, cand_id),
+        "baselines": {name: measure(pol) for name, pol in baseline_policies(env.cfg).items()},
         "n_episodes": n,
         "device": jax.default_backend(),
     }
     if champion_params is not None:
         try:
-            result["champion_metrics"] = measure(greedy_policy(champion_params, env.cfg))
+            result["champion_metrics"] = measure(actor_policy(champion_params))
         except Exception as e:  # noqa: BLE001 - an incompatible champion is inconclusive, not fatal
             result["champion_error"] = f"{type(e).__name__}: {e}"
+
+    l1 = env.cfg.resource.enabled
+    if l1:
+        # Frozen resource bank: candidate and every baseline, per combination.
+        # Refuses training seeds inside the bank's reserved ranges.
+        seeds = plan["training_seeds"]
+        result["resource_bank"] = {
+            "candidate": evaluate_resource_bank(
+                env, cand_pol, training_seeds=seeds, recording=recording, record_policy=cand_id,
+                record_index=record_index,
+            ),
+            "baselines": {name: evaluate_resource_bank(env, pol, training_seeds=seeds)
+                          for name, pol in baseline_policies(env.cfg).items()},
+        }
 
     reports, mismatches = [], []
     for i in range(min(plan["verifier_episodes"], n)):
         final, traj = env.rollout(keys[i], cand_pol, action_filter=afilter)
-        rep = verifier.verify_trace(env.cfg, np.asarray(final.hmap), _to_numpy_trace(traj),
+        trace = _to_numpy_trace(traj)
+        rep = verifier.verify_trace(env.cfg, np.asarray(final.hmap), trace,
                                     np.asarray(final.threats.kind), np.asarray(final.threats.active))
         reports.append({"episode": i, "ok": rep.ok, "shootdowns": rep.shootdowns,
                         "terrain_violations": rep.terrain_violations,
                         "bounds_violations": rep.bounds_violations,
                         "max_pd_error": rep.max_pd_error})
         mismatches.extend(f"episode {i}: {m}" for m in rep.mismatches[:20])
+        if l1:
+            from ..rl.reward import RewardWeights, compute, constraint_cost
+
+            weights = RewardWeights()
+            start = np.asarray(env.reset(jax.random.split(keys[i])[0])[0].air.pos)
+            rres = verifier.verify_resource_trace(
+                env.cfg, trace, start=start, weights=dataclasses.asdict(weights),
+                reward=np.asarray(compute(traj["terms"], weights)),
+                cost=np.asarray(constraint_cost(traj["terms"])),
+            )
+            reports[-1].update({"resource_ok": rres.ok, "fuel_losses": rres.fuel_losses,
+                                "diversions": rres.diversions, "total_cost": rres.total_cost})
+            mismatches.extend(f"episode {i}: resource: {m}" for m in rres.mismatches[:20])
+    if l1:
+        bank = result["resource_bank"]
+        mismatches.extend(f"resource bank candidate: {p}" for p in bank["candidate"]["problems"])
+        for split in ("heldout", "train_reference"):
+            for combo, row in bank["candidate"][split]["by_combination"].items():
+                mismatches.extend(f"resource bank {split}/{combo}: {m}" for m in row["verification"]["mismatches"])
     result["verifier"] = {"episodes": len(reports), "ok": not mismatches,
                           "mismatches": mismatches[:100], "reports": reports}
     return result
@@ -225,4 +303,5 @@ def build_record(*, candidate_id: str, snapshot_rec: dict, plan: dict, env_shape
         "baselines": measured.get("baselines"),
         "champion": champ_block,
         "verifier": measured.get("verifier"),
+        **({"resource_bank": measured["resource_bank"]} if measured.get("resource_bank") else {}),
     }

@@ -30,7 +30,7 @@ silently reset:
     list, so a resume that started with an empty list would truncate the curve
     to the resumed segment.
 
-So the schema-4 checkpoint carries all of it. The top-level `actor`, `critic`,
+So the checkpoint carries all of it. The top-level `actor`, `critic`,
 `lam_raw`, `red_level`, `iter` and `env_cfg` keys are kept exactly where they
 were, because `naigos/demo/replay.py` and `naigos/demo/live.py` read them
 through `load()`, and a checkpoint format change must not break the demo.
@@ -55,11 +55,17 @@ hand-rolled array format to get subtly wrong. A checkpoint is now a directory
 atomicity reasoning as before) rather than a single pickle file.
 `scripts/convert_checkpoint.py` migrates a pre-schema-4 pickle one-way; nothing
 in this module reads pickle, by design.
+
+Schema 5 adds explicit environment, observation, and actor identifiers plus the
+L1 resource configuration. Schema-4 recovery checkpoints remain resumable only
+as baseline-v0; missing fields never imply a resource-world upgrade.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -69,18 +75,30 @@ import numpy as np
 import orbax.checkpoint as ocp
 
 from . import runmeta
+from . import policies
 from .ppo import Learner
 from .red_team import RedCurriculum
 from .reward import RewardCurriculum, RewardWeights
+from ..env.config import (
+    RESOURCE_WORLD_BASELINE,
+    RESOURCE_WORLD_L1,
+    ResourceWorldConfig,
+)
 
 #: 1 = the policy-export format written before resume existed. 2 added
 #: `recovery`. 3 added the lifetime CMDP accumulators (`cost_accum`,
 #: `episode_accum`) that make the measured cost rate invariant to PPO
 #: n_steps -- see `naigos/rl/ppo.py`. 4 replaced the pickle file with an Orbax
-#: checkpoint directory (next-steps.md G-3); nothing else about the schema
-#: changed. `load` only understands schema 4; a pre-4 checkpoint must go
-#: through `scripts/convert_checkpoint.py` first.
-CHECKPOINT_SCHEMA = 4
+#: checkpoint directory (next-steps.md G-3). 5 adds explicit resource-world
+#: identity and configuration. A pre-4 checkpoint must go through the one-way
+#: converter; schema 4 remains a supported baseline recovery format.
+CHECKPOINT_SCHEMA = 5
+SUPPORTED_CHECKPOINT_SCHEMAS = (4, CHECKPOINT_SCHEMA)
+
+BASELINE_OBSERVATION_SCHEMA = "Observation-v0"
+RESOURCE_OBSERVATION_SCHEMA = "L1EnduranceObservation-v1"
+BASELINE_ACTOR_SCHEMA = "ActorV1"
+RESOURCE_ACTOR_SCHEMA = "ActorV1+L1EnduranceInputs"
 
 REQUIRED_RECOVERY_KEYS = (
     "iteration",
@@ -235,6 +253,11 @@ def save(
     # Orbax requires an absolute checkpoint path; callers (train.py, CLI tools)
     # commonly pass a relative one.
     path = Path(path).resolve()
+    policy_spec = policies.get_policy_spec(
+        env_cfg,
+        family=ppo_cfg.policy_family,
+        version=ppo_cfg.policy_version,
+    )
     blob = {
         # --- unchanged policy-export surface: the demo reads these ---
         "schema": CHECKPOINT_SCHEMA,
@@ -244,6 +267,24 @@ def save(
         "red_level": float(red_level),
         "iter": int(iteration),
         "env_cfg": dataclasses.asdict(env_cfg),
+        "policy": {
+            "family": policy_spec.family.value,
+            "version": policy_spec.version,
+            "spec": policy_spec.to_dict(),
+            "spec_sha256": policy_spec.sha256,
+        },
+        # Environment/actor semantics. Their absence in an existing schema-4
+        # checkpoint means baseline-v0; resource checkpoints never rely on that
+        # fallback and carry the full fixed-capacity configuration explicitly.
+        "environment_model_id": env_cfg.resource.model,
+        "observation_schema_id": (
+            RESOURCE_OBSERVATION_SCHEMA if env_cfg.resource.enabled else BASELINE_OBSERVATION_SCHEMA
+        ),
+        "actor_schema_id": RESOURCE_ACTOR_SCHEMA if env_cfg.resource.enabled else BASELINE_ACTOR_SCHEMA,
+        "resource_config": dataclasses.asdict(env_cfg.resource),
+        "resource_bank": (
+            _resource_bank_record(env_cfg) if env_cfg.resource.enabled else None
+        ),
         # --- everything needed to continue ---
         "recovery": {
             "iteration": int(iteration),
@@ -278,6 +319,7 @@ def save(
             "run_name": run_name,
             "code_commit": code_commit,
             "resumed_from": list(resumed_from or []),
+            "resource_curriculum": {"kind": "fixed-v1", "state": None},
         },
     }
     tmp = path.with_name(path.name + ".tmp")
@@ -303,6 +345,76 @@ def load(path: str | os.PathLike) -> dict:
     return blob
 
 
+def policy_identity(blob: dict) -> dict:
+    """Return validated actor identity, migrating metadata-free checkpoints.
+
+    Schema-4 checkpoints written before the model ladder are unambiguously
+    ``deepsets@1``. They remain deployable/resumable under that family, while a
+    caller asking for a recurrent actor is refused before parameter grafting.
+    """
+
+    record = blob.get("policy")
+    if record is None:
+        return {
+            "family": policies.DEFAULT_POLICY_FAMILY.value,
+            "version": policies.DEFAULT_POLICY_VERSION,
+            "spec": None,
+            "spec_sha256": None,
+            "migrated_legacy_default": True,
+        }
+    if not isinstance(record, dict):
+        raise CheckpointError("checkpoint policy metadata is not an object")
+    family, version = record.get("family"), str(record.get("version", ""))
+    try:
+        policies.PolicyFamily(family)
+    except (TypeError, ValueError) as exc:
+        raise CheckpointError(f"checkpoint has unknown policy family {family!r}") from exc
+    spec, digest = record.get("spec"), record.get("spec_sha256")
+    if spec is not None:
+        actual = hashlib.sha256(
+            json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if digest != actual:
+            raise CheckpointError(
+                "checkpoint policy metadata digest does not match its specification"
+            )
+    return {
+        "family": family,
+        "version": version,
+        "spec": spec,
+        "spec_sha256": digest,
+        "migrated_legacy_default": False,
+    }
+
+
+def assert_policy_compatible(blob: dict, expected: policies.PolicySpec) -> None:
+    """Refuse loading actor weights under a different family/version/spec."""
+
+    saved = policy_identity(blob)
+    want = (expected.family.value, expected.version)
+    got = (saved["family"], saved["version"])
+    if got != want:
+        raise CheckpointError(
+            f"checkpoint policy is {got[0]}@{got[1]}, but this run requested "
+            f"{want[0]}@{want[1]}"
+        )
+    # Legacy DeepSets checkpoints have no full contract to compare. Concrete
+    # PyTree grafting remains the final shape/dtype compatibility check.
+    digest = saved.get("spec_sha256")
+    if digest is not None and digest != expected.sha256:
+        raise CheckpointError(
+            "checkpoint policy specification differs from the requested actor "
+            f"(checkpoint {digest}, requested {expected.sha256})"
+        )
+
+
+def policy_kwargs(blob: dict) -> dict[str, str]:
+    """Keyword arguments for ``ppo.greedy_policy`` from checkpoint metadata."""
+
+    identity = policy_identity(blob)
+    return {"family": identity["family"], "version": identity["version"]}
+
+
 def is_resumable(path: str | os.PathLike) -> bool:
     """True if this file is a complete, schema-4 checkpoint.
 
@@ -320,7 +432,7 @@ def is_resumable(path: str | os.PathLike) -> bool:
     rec = blob.get("recovery")
     if not isinstance(rec, dict):
         return False
-    if blob.get("schema") != CHECKPOINT_SCHEMA:
+    if blob.get("schema") not in SUPPORTED_CHECKPOINT_SCHEMAS:
         return False
     if any(k not in rec for k in REQUIRED_RECOVERY_KEYS):
         return False
@@ -358,6 +470,15 @@ def curriculum_compatibility(
         if saved is None:
             problems.append(f"{label}: not recorded in this checkpoint")
             continue
+        # `diverted` is unreachable in baseline-v0. A schema-4 baseline
+        # checkpoint written before that reward field existed is therefore
+        # semantically unchanged; normalize only this neutral addition.
+        if (
+            label == "reward weights"
+            and environment_model_from_blob(blob) == RESOURCE_WORLD_BASELINE
+            and "diverted" not in saved
+        ):
+            saved = {**saved, "diverted": current["diverted"]}
         changed = sorted(
             k for k in set(saved) | set(current) if saved.get(k) != current.get(k)
         )
@@ -370,13 +491,20 @@ def curriculum_compatibility(
     return problems
 
 
-def restore_learner(template: Learner, blob: dict) -> Learner:
+def restore_learner(
+    template: Learner,
+    blob: dict,
+    *,
+    expected_policy: policies.PolicySpec | None = None,
+) -> Learner:
     """Graft a checkpoint's arrays onto a freshly initialised learner.
 
     `template` must come from `init_learner` with the same configuration, so the
     optimizer transformations, the network structure and the multiplier's Adam
     state are the ones this code builds. Only the values come from disk.
     """
+    if expected_policy is not None:
+        assert_policy_compatible(blob, expected_policy)
     rec = blob.get("recovery")
     if not isinstance(rec, dict):
         raise CheckpointError(
@@ -429,7 +557,93 @@ def obs_config_from_blob(blob: dict) -> dict:
     not record it, and was trained without it.
     """
     env_cfg = blob.get("env_cfg") or {}
-    return {"obs_edge_features": bool(env_cfg.get("obs_edge_features", False))}
+    out = {"obs_edge_features": bool(env_cfg.get("obs_edge_features", False))}
+    if environment_model_from_blob(blob) == RESOURCE_WORLD_L1:
+        out["resource"] = resource_config_from_blob(blob)
+    return out
+
+
+def _resource_bank_record(env_cfg) -> dict:
+    from ..env.resource_bank import base_config_digest, resource_protocol
+
+    protocol = resource_protocol()
+    return {
+        "version": protocol["bank"],
+        "sha256": protocol["bank_sha256"],
+        "base_config_sha256": base_config_digest(env_cfg),
+    }
+
+
+def environment_model_from_blob(blob: dict) -> str:
+    """Missing schema-4 field means baseline-v0, never an implicit upgrade."""
+    return str(blob.get("environment_model_id") or RESOURCE_WORLD_BASELINE)
+
+
+def resource_config_from_blob(blob: dict) -> ResourceWorldConfig:
+    model = environment_model_from_blob(blob)
+    if model == RESOURCE_WORLD_BASELINE:
+        return ResourceWorldConfig()
+    if model != RESOURCE_WORLD_L1:
+        raise CheckpointError(f"checkpoint names unsupported environment model {model!r}")
+    raw = blob.get("resource_config")
+    if not isinstance(raw, dict):
+        raise CheckpointError(
+            f"{RESOURCE_WORLD_L1} checkpoint is missing its resource_config; implicit migration is refused"
+        )
+    fields = {field.name for field in dataclasses.fields(ResourceWorldConfig)}
+    values = {name: value for name, value in raw.items() if name in fields}
+    for name in ("fuel_budget_ratio", "reserve_ratio", "burn_multiplier", "active_gate_mask"):
+        if name in values:
+            values[name] = tuple(values[name])
+    config = ResourceWorldConfig(**values)
+    if config.model != model:
+        raise CheckpointError(
+            f"checkpoint environment_model_id {model!r} disagrees with resource_config.model {config.model!r}"
+        )
+    return config
+
+
+def require_environment_compatible(blob: dict, cfg, source) -> None:
+    """Refuse cross-loading L0/ActorV1 and L1/ActorV2 checkpoints."""
+    saved_model = environment_model_from_blob(blob)
+    saved_obs = str(blob.get("observation_schema_id") or BASELINE_OBSERVATION_SCHEMA)
+    wanted_obs = RESOURCE_OBSERVATION_SCHEMA if cfg.resource.enabled else BASELINE_OBSERVATION_SCHEMA
+    saved_actor = str(blob.get("actor_schema_id") or BASELINE_ACTOR_SCHEMA)
+    wanted_actor = RESOURCE_ACTOR_SCHEMA if cfg.resource.enabled else BASELINE_ACTOR_SCHEMA
+    if (saved_model, saved_obs, saved_actor) != (cfg.resource.model, wanted_obs, wanted_actor):
+        raise CheckpointError(
+            f"{source}: checkpoint is {saved_model}/{saved_obs}/{saved_actor}, but the environment is "
+            f"{cfg.resource.model}/{wanted_obs}/{wanted_actor}; cross-schema loading is refused"
+        )
+    if cfg.resource.enabled and dataclasses.asdict(resource_config_from_blob(blob)) != dataclasses.asdict(cfg.resource):
+        raise CheckpointError(f"{source}: checkpoint resource_config differs from the requested L1 environment")
+    if cfg.resource.enabled:
+        saved_bank = (blob.get("resource_bank") or {}).get("sha256")
+        want_bank = _resource_bank_record(cfg)["sha256"]
+        if saved_bank != want_bank:
+            raise CheckpointError(
+                f"{source}: checkpoint resource bank digest {saved_bank!r} differs from this "
+                f"code's {want_bank!r}; the frozen L1 bank changed, resume is refused"
+            )
+
+
+def require_resume_compatible(blob: dict, cfg, ppo_cfg, policy_spec, source) -> None:
+    """Every identity a resumed run must share with its checkpoint, checked up front.
+
+    Resource identity (model, observation schema, config, bank digest) and policy
+    identity (family, version, spec) are independent axes; each is validated on
+    its own so the error names the axis that moved. A recurrent checkpoint also
+    pins its truncated-BPTT sequence length, which changes the update.
+    """
+    require_environment_compatible(blob, cfg, source)
+    assert_policy_compatible(blob, policy_spec)
+    if policy_spec.memory_requirements.recurrent:
+        saved = (blob.get("recovery") or {}).get("ppo", {}).get("recurrent_seq_len")
+        if saved is None or int(saved) != int(ppo_cfg.recurrent_seq_len):
+            raise CheckpointError(
+                f"{source}: checkpoint recurrent_seq_len is {saved!r}, but this run requested "
+                f"{ppo_cfg.recurrent_seq_len}"
+            )
 
 
 def require_actor_ego_dim(actor_params, cfg, source) -> None:
@@ -442,6 +656,7 @@ def require_actor_ego_dim(actor_params, cfg, source) -> None:
     if got != cfg.ego_dim:
         raise SystemExit(
             f"{source}: the actor takes a {got}-wide ego observation but this env builds "
-            f"{cfg.ego_dim} (obs_edge_features={cfg.obs_edge_features}). The checkpoint's "
+            f"{cfg.ego_dim} (obs_edge_features={cfg.obs_edge_features}, "
+            f"environment_model_id={cfg.resource.model}). The checkpoint's "
             f"env_cfg does not describe the observation its actor was trained on."
         )
