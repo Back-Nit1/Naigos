@@ -1,0 +1,112 @@
+{
+  "aoi": "los_angeles_basin",
+  "label": "Los Angeles basin (notional coastal-basin theatre)",
+  "atmosphere_profile": "warm_coastal_basin",
+  "urban_bounds": {
+    "west": -118.3,
+    "south": 34.0,
+    "east": -118.2,
+    "north": 34.09,
+    "max_building_height_m": 400,
+    "rationale": "The visual-only urban sub-box, about 9.2 x 10.0 km: Downtown Los Angeles' high-rise core, the lower grid of the surrounding districts and the freeway cuts between them. It is larger than the physics-grade obstacle box (-118.28..-118.215 E, 34.025..34.075 N, Downtown only) because it carries presentation context; only the smaller box is collision data. Inside the AOI and clear of every airfield zone. The height cap is 400 m because the tallest real tower here is about 335 m."
+  },
+  "camera": {
+    "default": "urban_overview",
+    "safe_region": [
+      [
+        -118.45,
+        33.86
+      ],
+      [
+        -118.05,
+        33.86
+      ],
+      [
+        -118.05,
+        34.2
+      ],
+      [
+        -118.45,
+        34.2
+      ]
+    ],
+    "presets": {
+      "urban_overview": {
+        "lon": -118.2505,
+        "lat": 34.0515,
+        "heading_deg": 135,
+        "pitch_deg": -11,
+        "range_m": 6200,
+        "target_agl_m": 100,
+        "label": "oblique across Downtown and the lower grid"
+      },
+      "valley_overview": {
+        "lon": -118.3,
+        "lat": 34.07,
+        "heading_deg": 265,
+        "pitch_deg": -5,
+        "range_m": 18000,
+        "target_agl_m": 50,
+        "label": "downtown in the basin and foothills"
+      },
+      "street_canyon": {
+        "lon": -118.254,
+        "lat": 34.049,
+        "heading_deg": 126,
+        "pitch_deg": -7,
+        "range_m": 800,
+        "target_agl_m": 10,
+        "label": "street canyon (presentation camera only)"
+      }
+    }
+  },
+  "ambience": {
+    "entity_standoff_m": 3000,
+    "edge_margin_m": 2500,
+    "regions": [
+      {
+        "name": "foothill slopes north-east of the basin",
+        "polygon": [
+          [
+            -118.2,
+            34.22
+          ],
+          [
+            -118.05,
+            34.22
+          ],
+          [
+            -118.05,
+            34.29
+          ],
+          [
+            -118.2,
+            34.29
+          ]
+        ]
+      },
+      {
+        "name": "Santa Monica Mountains ridge land",
+        "polygon": [
+          [
+            -118.6,
+            34.08
+          ],
+          [
+            -118.45,
+            34.08
+          ],
+          [
+            -118.45,
+            34.14
+          ],
+          [
+            -118.6,
+            34.14
+          ]
+        ]
+      }
+    ]
+  },
+  "notes": "Ambience regions are coarse, hand-drawn open hill land far from the urban box and from the airfields and campus the AOI declares as protected zones. No place, facility or road was consulted to draw them."
+}

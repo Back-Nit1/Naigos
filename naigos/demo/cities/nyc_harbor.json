@@ -1,0 +1,112 @@
+{
+  "aoi": "nyc_harbor",
+  "label": "New York Harbor (notional urban-coastal theatre)",
+  "atmosphere_profile": "cool_atlantic_coast",
+  "urban_bounds": {
+    "west": -74.05,
+    "south": 40.68,
+    "east": -73.95,
+    "north": 40.76,
+    "max_building_height_m": 600,
+    "rationale": "The visual-only urban sub-box, about 8.4 x 8.9 km: Lower Manhattan's high-rise core, the Midtown-side blocks above it, the Brooklyn and Jersey City waterfronts facing it across the water, and the harbor in between. It is larger than the physics-grade obstacle box (-74.025..-73.965 E, 40.695..40.74 N, Lower Manhattan only) because it carries presentation context; only the smaller box is collision data. Inside the AOI; the container-terminal and heliport zones it touches are cut out of the extraction. The height cap is 600 m because the tallest real tower here is about 541 m."
+  },
+  "camera": {
+    "default": "urban_overview",
+    "safe_region": [
+      [
+        -74.12,
+        40.62
+      ],
+      [
+        -73.9,
+        40.62
+      ],
+      [
+        -73.9,
+        40.8
+      ],
+      [
+        -74.12,
+        40.8
+      ]
+    ],
+    "presets": {
+      "urban_overview": {
+        "lon": -74.0105,
+        "lat": 40.708,
+        "heading_deg": 25,
+        "pitch_deg": -9,
+        "range_m": 5200,
+        "target_agl_m": 120,
+        "label": "harbor view of the Lower Manhattan skyline"
+      },
+      "coastal_corridor": {
+        "lon": -74.014,
+        "lat": 40.729,
+        "heading_deg": 5,
+        "pitch_deg": -9,
+        "range_m": 3600,
+        "target_agl_m": 40,
+        "label": "Hudson waterfront corridor"
+      },
+      "street_canyon": {
+        "lon": -74.0105,
+        "lat": 40.7065,
+        "heading_deg": 8,
+        "pitch_deg": -6,
+        "range_m": 700,
+        "target_agl_m": 10,
+        "label": "street canyon (presentation camera only)"
+      }
+    }
+  },
+  "ambience": {
+    "entity_standoff_m": 3000,
+    "edge_margin_m": 2500,
+    "regions": [
+      {
+        "name": "open harbor water south of the Narrows",
+        "polygon": [
+          [
+            -74.06,
+            40.5
+          ],
+          [
+            -73.95,
+            40.5
+          ],
+          [
+            -73.95,
+            40.56
+          ],
+          [
+            -74.06,
+            40.56
+          ]
+        ]
+      },
+      {
+        "name": "Raritan Bay shore waters",
+        "polygon": [
+          [
+            -74.35,
+            40.48
+          ],
+          [
+            -74.15,
+            40.48
+          ],
+          [
+            -74.15,
+            40.54
+          ],
+          [
+            -74.35,
+            40.54
+          ]
+        ]
+      }
+    ]
+  },
+  "notes": "Ambience regions are coarse, hand-drawn open water on the harbor's southern edge, far from the urban box and from the airfields and terminals the AOI declares as protected zones. No place, facility or route was consulted to draw them."
+}

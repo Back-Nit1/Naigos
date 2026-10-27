@@ -43,10 +43,15 @@ NYC_FOOTPRINTS_VIEW = "https://data.cityofnewyork.us/api/views/5zhs-2jue.json"
 #: Per theatre: the EPT collection that covers its physics box and how deep to read it.
 #: ``max_depth`` bounds the download: nominal point spacing halves per level.
 LIDAR = {
-    "nyc_harbor": {"collection": "NY_NewYorkCity", "max_depth": 7, "tnm_project": "NY_New_York"},
-    "los_angeles_basin": {"collection": "CA_LosAngeles_1_B23", "max_depth": 10, "tnm_project": "CA LosAngeles"},
+    # structure_classes: the provider's building/bridge classes where it has them. The 2023 Los
+    # Angeles collection has NO building class (only 1 unclassified, 2 ground, 7/18 noise,
+    # 17 bridge), so there every non-ground, non-noise return is a candidate surface object --
+    # buildings, but also tree canopy, which is a real obstacle too (see the artifact notes).
+    "nyc_harbor": {"collection": "NY_NewYorkCity", "max_depth": 7, "tnm_project": "NY_New_York",
+                   "structure_classes": (6, 17)},
+    "los_angeles_basin": {"collection": "CA_LosAngeles_1_B23", "max_depth": 10, "tnm_project": None,
+                          "structure_classes": (1, 17)},
 }
-STRUCTURE_CLASSES = (6, 17)  # building, bridge deck
 GROUND_CLASSES = (2, 9)  # ground, water
 MIN_STRUCTURE_POINTS = 2  # returns in a cell before it can be a structure
 SPIKE_MARGIN_M = 60.0  # a cell this far, and 3x, above its tallest neighbour is classification noise
@@ -199,7 +204,8 @@ def ept_nodes(collection: str, root_bounds: list[float], bbox_3857: tuple[float,
     return sorted(set(out))
 
 
-def _read_node(collection: str, key: str, gs: GridSpec, box_utm: tuple[float, float, float, float]):
+def _read_node(collection: str, key: str, gs: GridSpec, structure_classes: tuple[int, ...]):
+    """One EPT node, reduced straight to the grid: per-cell structure max/count, ground sum/count."""
     import laspy
     import requests
     from pyproj import Transformer
@@ -217,17 +223,22 @@ def _read_node(collection: str, key: str, gs: GridSpec, box_utm: tuple[float, fl
             time.sleep(1.5 * (attempt + 1))
     else:
         raise RuntimeError(f"{url}: {last}")
-    sha = cache.sha256_bytes(r.content)
     las = laspy.read(io.BytesIO(r.content))
     cls = np.asarray(las.classification)
-    keep = np.isin(cls, STRUCTURE_CLASSES + GROUND_CLASSES)
-    tf = Transformer.from_crs("EPSG:3857", f"EPSG:{gs.epsg}", always_xy=True)
-    e, n = tf.transform(np.asarray(las.x), np.asarray(las.y))
-    inside = keep & (e >= box_utm[0]) & (e <= box_utm[2]) & (n >= box_utm[1]) & (n <= box_utm[3])
+    e, n = Transformer.from_crs("EPSG:3857", f"EPSG:{gs.epsg}", always_xy=True).transform(
+        np.asarray(las.x), np.asarray(las.y))
+    idx, z = _cell_index(e, n, gs), np.asarray(las.z)
+    shape = (gs.ny, gs.nx)
+    st, gr = np.isin(cls, structure_classes), np.isin(cls, GROUND_CLASSES)
+    keep = st | gr
     gps = np.asarray(las.gps_time)
-    return (key, sha, len(r.content), int(len(cls)), e[inside], n[inside],
-            np.asarray(las.z)[inside].astype(np.float32), cls[inside].astype(np.uint8),
-            float(gps.min()) if len(gps) else math.nan, float(gps.max()) if len(gps) else math.nan)
+    return {
+        "key": key, "sha": cache.sha256_bytes(r.content), "bytes": len(r.content), "points": int(len(cls)),
+        "top": _reduce(idx[st], z[st], shape, "max"), "count": _reduce(idx[st], z[st], shape, "count"),
+        "gsum": _reduce(idx[gr], z[gr], shape, "sum"), "gcount": _reduce(idx[gr], z[gr], shape, "count"),
+        "any": _reduce(idx[keep], z[keep], shape, "count"), "kept": int(((idx >= 0) & keep).sum()),
+        "t0": float(gps.min()) if len(gps) else math.nan, "t1": float(gps.max()) if len(gps) else math.nan,
+    }
 
 
 def _gps_date(t: float) -> str | None:
@@ -237,8 +248,20 @@ def _gps_date(t: float) -> str | None:
     return (dt.datetime(1980, 1, 6) + dt.timedelta(seconds=t + 1e9)).date().isoformat()
 
 
-def fetch_points(aoi: AOI, gs: GridSpec, force: bool = False) -> cache.Artifact:
-    """Download the lidar nodes over the grid once and cache the structure/ground subset."""
+def ept_last_modified(collection: str) -> str:
+    """HTTP Last-Modified of the collection's ept.json: when this EPT copy was built."""
+    import requests
+
+    url = f"{EPT_BASE}/{collection}/ept.json"
+    check_url(url, "usgs_3dep_lidar")
+    r = requests.head(url, timeout=60, headers={"User-Agent": cache.USER_AGENT})
+    r.raise_for_status()
+    lm = r.headers.get("Last-Modified")
+    return dt.datetime.strptime(lm, "%a, %d %b %Y %H:%M:%S GMT").date().isoformat() if lm else "unknown"
+
+
+def fetch_lidar(aoi: AOI, gs: GridSpec, force: bool = False) -> cache.Artifact:
+    """Download the lidar nodes over the grid once; cache the per-cell rasters they reduce to."""
     cfg = LIDAR[aoi.name]
     coll, depth = cfg["collection"], cfg["max_depth"]
     ept = _fetch_json(f"lidar/{coll}/ept", f"{EPT_BASE}/{coll}/ept.json", f"lidar/{coll}/ept.json")
@@ -253,26 +276,38 @@ def fetch_points(aoi: AOI, gs: GridSpec, force: bool = False) -> cache.Artifact:
         keys = ept_nodes(coll, ept["bounds"], (min(xs), min(ys), max(xs), max(ys)), depth)
         if not keys:
             raise RuntimeError(f"no lidar nodes of {coll} intersect the {aoi.name} physics box")
+        shape = (gs.ny, gs.nx)
+        top = np.full(shape, np.nan)
+        acc = {k: np.zeros(shape) for k in ("count", "gsum", "gcount", "any")}
+        nodes, read, kept, t0, t1 = [], 0, 0, math.inf, -math.inf
+        # fold each node into running grids as it arrives; 1000+ full-grid partials would not fit
         with cf.ThreadPoolExecutor(max_workers=8) as ex:
-            parts = list(ex.map(lambda k: _read_node(coll, k, gs, box), keys))
-        e = np.concatenate([p[4] for p in parts]); n = np.concatenate([p[5] for p in parts])
-        z = np.concatenate([p[6] for p in parts]); c = np.concatenate([p[7] for p in parts])
-        t0 = np.nanmin([p[8] for p in parts]); t1 = np.nanmax([p[9] for p in parts])
+            for p in ex.map(lambda k: _read_node(coll, k, gs, cfg["structure_classes"]), keys):
+                top = np.fmax(top, p["top"])
+                for k in acc:
+                    acc[k] += np.nan_to_num(p[k])
+                nodes.append([p["key"], p["sha"], p["bytes"], p["points"]])
+                read, kept = read + p["points"], kept + p["kept"]
+                t0, t1 = min(t0, p["t0"]), max(t1, p["t1"])
+        count, gsum, gcnt, anyc = acc["count"], acc["gsum"], acc["gcount"], acc["any"]
         manifest = {
-            "collection": coll, "max_depth": depth, "nodes": [[p[0], p[1], p[2], p[3]] for p in parts],
-            "points_read": int(sum(p[3] for p in parts)), "points_kept": int(len(z)),
+            "collection": coll, "max_depth": depth, "structure_classes": list(cfg["structure_classes"]),
+            "nodes": nodes, "points_read": int(read), "points_kept": int(kept),
             "gps_time_min": float(t0), "gps_time_max": float(t1),
             "captured_min": _gps_date(float(t0)), "captured_max": _gps_date(float(t1)),
         }
         buf = io.BytesIO()
-        np.savez(buf, e=e, n=n, z=z, c=c, manifest=np.frombuffer(json.dumps(manifest).encode(), np.uint8))
+        np.savez(buf, top=top, count=np.where(count > 0, count, np.nan),
+                 ground=np.where(gcnt > 0, gsum / np.where(gcnt > 0, gcnt, 1), np.nan),
+                 any=np.where(anyc > 0, anyc, np.nan),
+                 manifest=np.frombuffer(json.dumps(manifest).encode(), np.uint8))
         return buf.getvalue()
 
     return cache.produce(
-        key=f"urban_lidar/{aoi.name}/{aoi.fingerprint}/{int(gs.cell)}m", source_key="usgs_3dep_lidar",
-        url=f"{EPT_BASE}/{coll}/ept.json", rel_path=f"urban_src/{aoi.name}_{aoi.fingerprint}_lidar_subset.npz",
+        key=f"urban_lidar_rasters/{aoi.name}/{aoi.fingerprint}/{int(gs.cell)}m", source_key="usgs_3dep_lidar",
+        url=f"{EPT_BASE}/{coll}/ept.json", rel_path=f"urban_src/{aoi.name}_{aoi.fingerprint}_lidar_cells.npz",
         builder=build, force=force,
-        note=f"USGS 3DEP lidar ({coll}, EPT depth <= {depth}), classes 2/6/9/17 inside the physics box.")
+        note=f"USGS 3DEP lidar ({coll}, EPT depth <= {depth}) reduced to per-cell structure/ground rasters.")
 
 
 def lidar_products(aoi: AOI, bbox: tuple[float, float, float, float], force: bool = False) -> list[dict]:
@@ -309,6 +344,8 @@ def _reduce(idx: np.ndarray, vals: np.ndarray, shape: tuple[int, int], op: str) 
     cells, start = np.unique(idx, return_index=True)
     if op == "max":
         out[cells] = np.maximum.reduceat(vals, start)
+    elif op == "sum":
+        out[cells] = np.add.reduceat(vals, start)
     elif op == "mean":
         out[cells] = np.add.reduceat(vals, start) / np.diff(np.append(start, idx.size))
     else:
@@ -361,19 +398,6 @@ def despike(height: np.ndarray, count: np.ndarray) -> tuple[np.ndarray, int]:
     spike = np.isfinite(height) & (h > nb + SPIKE_MARGIN_M) & (h > 3.0 * nb)
     out = np.where(spike, np.where(nb >= MIN_STRUCTURE_HEIGHT_M, nb, np.nan), height)
     return out, int(spike.sum())
-
-
-def lidar_rasters(points: dict[str, np.ndarray], gs: GridSpec) -> dict[str, np.ndarray]:
-    shape = (gs.ny, gs.nx)
-    idx = _cell_index(points["e"], points["n"], gs)
-    st = np.isin(points["c"], STRUCTURE_CLASSES)
-    gr = np.isin(points["c"], GROUND_CLASSES)
-    return {
-        "top": _reduce(idx[st], points["z"][st], shape, "max"),
-        "count": _reduce(idx[st], points["z"][st], shape, "count"),
-        "ground": _reduce(idx[gr], points["z"][gr], shape, "mean"),
-        "any": _reduce(idx, points["z"], shape, "count"),
-    }
 
 
 def nyc_footprints(aoi: AOI, gs: GridSpec, force: bool = False) -> tuple[cache.Artifact, list[dict]]:
@@ -466,11 +490,10 @@ def build_artifact(aoi: AOI, dem_npz: Path, cache_root: Path | None = None, forc
     gs = grid_spec(aoi, reference_env_origin(dem_npz))
     ground_art = fetch_ground(aoi, gs, force)
     dem = sample_ground(ground_art, gs)
-    pts_art = fetch_points(aoi, gs, force)
+    pts_art = fetch_lidar(aoi, gs, force)
     with np.load(pts_art.abs_path) as z:
-        points = {k: z[k] for k in ("e", "n", "z", "c")}
+        ras = {k: z[k] for k in ("top", "count", "ground", "any")}
         pm = json.loads(bytes(z["manifest"]).decode())
-    ras = lidar_rasters(points, gs)
 
     # Datum/unit check: lidar ground must agree with the DEM, or heights are measured on a wrong base.
     both = np.isfinite(ras["ground"]) & np.isfinite(dem)
@@ -539,16 +562,22 @@ def build_artifact(aoi: AOI, dem_npz: Path, cache_root: Path | None = None, forc
     if not covered.any():
         raise RuntimeError("no covered cell")
 
-    products = lidar_products(aoi, aoi.urban_physics.bounds, force)
+    products = (lidar_products(aoi, aoi.urban_physics.bounds, force)
+                if LIDAR[aoi.name]["tnm_project"] else [])
     cap = (pm["captured_min"] if pm["captured_min"] == pm["captured_max"]
            else f"{pm['captured_min']} .. {pm['captured_max']}") if pm["captured_min"] else "unknown (no adjusted GPS time)"
-    pub = max((p["publicationDate"] for p in products if p.get("publicationDate")), default="unknown")
+    coll = LIDAR[aoi.name]["collection"]
+    if products:
+        pub = max((p["publicationDate"] for p in products if p.get("publicationDate")), default="unknown")
+    else:
+        pub = f"EPT copy built {ept_last_modified(coll)} (collection {coll}; publisher release date not listed by TNM)"
     projects = sorted({p["title"].replace("USGS Lidar Point Cloud ", "").rsplit(" ", 1)[0] for p in products})
-    titles = f"{len(products)} TNM tiles of " + ", ".join(projects) if products else "no TNM product listed for this box"
+    titles = (f"{len(products)} TNM tiles of " + ", ".join(projects)) if products else "no TNM tile listing used"
     sources = [
         _source("usgs_3dep_dem", "USGS 3DEP bare-earth DEM", f"3DEP best-available, {aoi.urban_physics.cell_m:g} m", "ground",
                 "usgs_3dep", ground_art, "varies by source tile (3DEP seamless mosaic)", "unknown (service mosaic)"),
-        _source("usgs_3dep_lidar", "USGS 3DEP lidar point cloud (EPT)", f"{LIDAR[aoi.name]['collection']}; TNM: {titles}",
+        _source("usgs_3dep_lidar", "USGS 3DEP lidar point cloud (EPT)",
+                f"{LIDAR[aoi.name]['collection']}; classes {list(LIDAR[aoi.name]['structure_classes'])}; {titles}",
                 "structures", "usgs_3dep_lidar", pts_art, cap, pub),
         *sources_extra,
     ]
@@ -560,7 +589,10 @@ def build_artifact(aoi: AOI, dem_npz: Path, cache_root: Path | None = None, forc
         uncertainty_present=True,
         uncertainty_kind="heuristic height uncertainty, metres: 1.0 open ground; 1.5/3.0 lidar structure by return count; 5.0 footprint-only",
         exclusions=tuple(exclusions),
-        notes=(f"max-per-cell structure top over a {gs.cell:g} m cell (conservative: any structure in the cell "
+        notes=((" The provider classified no buildings in this collection (only unclassified, ground, noise, bridge), "
+                "so the obstacle mask is every non-ground surface return >= 3 m above local ground: buildings AND tree "
+                "canopy, vehicles-on-structures and other surface objects. It is an obstacle surface, not a building "
+                "inventory. ") if 1 in LIDAR[aoi.name]["structure_classes"] else "") + (f"max-per-cell structure top over a {gs.cell:g} m cell (conservative: any structure in the cell "
                f"blocks it); lidar nominal spacing at EPT depth {LIDAR[aoi.name]['max_depth']}; structure heights "
                "are lower bounds for spires and masts; isolated spikes >60 m and 3x above all neighbours are "
                "repaired as classification noise; classification is the provider's"))

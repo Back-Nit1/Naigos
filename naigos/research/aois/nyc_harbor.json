@@ -29,12 +29,11 @@
       "buffer_m": 1500,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure. Kept clear of extracted geometry, camera framing and every presentation effect, so nothing can read as happening at an airport."
+      "reason": "Civil aviation infrastructure. Kept clear of extracted geometry and every presentation effect, so nothing can read as happening at an airport. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "civil airport operating area (west)",
@@ -45,12 +44,11 @@
       "buffer_m": 1500,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure at the box's western shore; kept clear of extracted geometry, camera framing and every presentation effect."
+      "reason": "Civil aviation infrastructure at the box's western shore; kept clear of extracted geometry and every presentation effect. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "civil airport operating area (north-west)",
@@ -61,12 +59,11 @@
       "buffer_m": 1000,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure; kept clear of extracted geometry, camera framing and every presentation effect."
+      "reason": "Civil aviation infrastructure; kept clear of extracted geometry and every presentation effect. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "civil heliport (Lower Manhattan waterfront)",
@@ -76,10 +73,10 @@
       "north": 40.703,
       "buffer_m": 500,
       "policies": [
-        "camera",
+        "airfield",
         "ambience"
       ],
-      "reason": "Civil aviation infrastructure on the waterfront. No camera preset sits in, aims at or frames it, and no presentation effect originates there."
+      "reason": "Civil aviation infrastructure on the waterfront. No presentation effect originates there. Camera framing is not restricted here: the zone sits inside the skyline every Lower Manhattan shot looks at."
     },
     {
       "name": "container port and rail terminals (west)",
@@ -117,11 +114,9 @@
       "north": 40.69,
       "buffer_m": 800,
       "policies": [
-        "camera",
-        "ambience",
-        "extraction"
+        "ambience"
       ],
-      "reason": "Port and industrial waterfront. Kept clear of extracted geometry, camera framing and every presentation effect."
+      "reason": "Port and industrial waterfront. No presentation effect originates there. It borders the visual urban box and the physics box, so it is not cut from either: removing it would leave a hole in the harbor-facing skyline context."
     },
     {
       "name": "restricted federal property (the Narrows)",
@@ -137,6 +132,32 @@
         "render_cutout"
       ],
       "reason": "Restricted property on both shores of the harbor entrance. Nothing here is extracted, framed, drawn or used as an effect origin; the box records only that the project stays out."
+    },
+    {
+      "name": "civil heliport (west side)",
+      "west": -74.0105,
+      "south": 40.7525,
+      "east": -74.0035,
+      "north": 40.758,
+      "buffer_m": 500,
+      "policies": [
+        "airfield",
+        "ambience"
+      ],
+      "reason": "Civil aviation infrastructure on the Hudson waterfront. No presentation effect originates there."
+    },
+    {
+      "name": "civil heliport and seaplane base (east side)",
+      "west": -73.977,
+      "south": 40.7335,
+      "east": -73.969,
+      "north": 40.744,
+      "buffer_m": 500,
+      "policies": [
+        "airfield",
+        "ambience"
+      ],
+      "reason": "Civil aviation infrastructure on the East River waterfront, at the north-east corner of the urban sub-box. No presentation effect originates there."
     }
   ],
   "notes": "Civil airfields inside the box come from OurAirports and are start geometry only; the env spawns procedurally and never reads them for placement. The urban_physics box (Lower Manhattan) is the only place physics-grade urban obstacles exist; everywhere else the DEM is the whole physical surface."

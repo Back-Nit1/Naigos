@@ -123,6 +123,36 @@ PROFILES: dict[str, AtmosphereProfile] = {
         fog_density=2.3e-4, fog_min_brightness=0.08,
         haze_color="#d8c3a0", dust_alpha=0.12, shimmer=0.0008,
     ),
+    "cool_atlantic_coast": AtmosphereProfile(
+        key="cool_atlantic_coast",
+        description=("A restrained Atlantic-coast day: clear mid-morning light from the south-east "
+                     "so the harbor-facing skyline is side-lit, a cool blue-grey haze and no dust."),
+        sun_azimuth_deg=150.0, sun_altitude_deg=36.0,
+        light_color="#f3f6ff", light_intensity=2.2,
+        sky_hue_shift=0.01, sky_saturation_shift=-0.06, sky_brightness_shift=0.01,
+        fog_density=1.9e-4, fog_min_brightness=0.05,
+        haze_color="#b4c2d1", dust_alpha=0.04, shimmer=0.0,
+    ),
+    "cool_atlantic_dusk": AtmosphereProfile(
+        key="cool_atlantic_dusk",
+        description=("The same coast at dusk: a low sun from the west over the Hudson, rose-grey "
+                     "light, a slightly deeper haze. Presentation only; no physics term reads it."),
+        sun_azimuth_deg=285.0, sun_altitude_deg=9.0,
+        light_color="#ffd2b0", light_intensity=2.0,
+        sky_hue_shift=-0.01, sky_saturation_shift=-0.04, sky_brightness_shift=-0.04,
+        fog_density=2.2e-4, fog_min_brightness=0.07,
+        haze_color="#bfaeb0", dust_alpha=0.07, shimmer=0.0,
+    ),
+    "warm_coastal_basin": AtmosphereProfile(
+        key="warm_coastal_basin",
+        description=("A coastal basin under a marine layer burning off: warm early-afternoon light "
+                     "from the west-south-west, a pale warm haze that softens the far foothills."),
+        sun_azimuth_deg=235.0, sun_altitude_deg=32.0,
+        light_color="#ffe2b8", light_intensity=2.3,
+        sky_hue_shift=-0.01, sky_saturation_shift=-0.08, sky_brightness_shift=0.02,
+        fog_density=2.0e-4, fog_min_brightness=0.07,
+        haze_color="#d9c7ad", dust_alpha=0.07, shimmer=0.0,
+    ),
     "hot_dusty_inland": AtmosphereProfile(
         key="hot_dusty_inland",
         description=("Hot, dry mountain basin: high hard sun from the south-south-west, bleached "

@@ -15,10 +15,10 @@
   "parameters": {
     "schema": "naigos.urban_obstacles",
     "schema_version": 1,
-    "content_sha256": "2d463a17d58b58d005d30d65226d37cbbf07dc9576604b7a1501aed706fe7bc8",
-    "metadata_sha256": "8cd55d6602973d03bb6fe80816fed82e024735a67f20fd94c71a3813ed65ff35",
-    "payload_sha256": "138295a8d37bc9732cebe60a039a94e0f5e80f0563d90fbb597430743ae77529",
-    "artifact_dir": "urban_physics/nyc_harbor/2d463a17d58b58d0",
+    "content_sha256": "983838d2b68e51174b98b88663da622feef745ed09addb8b7761f2883909d7fe",
+    "metadata_sha256": "76559a47168f76c880b2cf2cedb1bd65b9c52c1f5283780724deb56b65cbea0e",
+    "payload_sha256": "4f9efffe34d15528edc07d41c9629a77161fa91a818a7dfd72b4975bf88ef56b",
+    "artifact_dir": "urban_physics/nyc_harbor/983838d2b68e5117",
     "cell_m": 10.0,
     "nx": 500,
     "ny": 493,
@@ -41,27 +41,27 @@
   },
   "evidence": {
     "lidar_ground_minus_dem_median_m": -0.033,
-    "lidar_points_kept": 12986113,
+    "lidar_points_kept": 12602568,
     "lidar_nodes": 295,
     "lidar_spike_cells_repaired": 17,
     "footprint_records": 15166,
     "cells_footprint_only": 19016,
-    "cells_lidar_only": 40654,
+    "cells_lidar_only": 40655,
     "cells_both": 71987,
     "footprint_vs_lidar_height_median_diff_m": -0.63,
     "footprint_vs_lidar_height_median_abs_diff_m": 2.83,
     "schema": "naigos.urban_obstacles",
     "schema_version": 1,
-    "content_sha256": "2d463a17d58b58d005d30d65226d37cbbf07dc9576604b7a1501aed706fe7bc8",
-    "metadata_sha256": "8cd55d6602973d03bb6fe80816fed82e024735a67f20fd94c71a3813ed65ff35",
-    "payload_sha256": "138295a8d37bc9732cebe60a039a94e0f5e80f0563d90fbb597430743ae77529",
+    "content_sha256": "983838d2b68e51174b98b88663da622feef745ed09addb8b7761f2883909d7fe",
+    "metadata_sha256": "76559a47168f76c880b2cf2cedb1bd65b9c52c1f5283780724deb56b65cbea0e",
+    "payload_sha256": "4f9efffe34d15528edc07d41c9629a77161fa91a818a7dfd72b4975bf88ef56b",
     "aoi": "nyc_harbor",
     "aoi_fingerprint": "997eeb1b1c",
     "cell_m": 10.0,
     "nx": 500,
     "ny": 493,
     "coverage_fraction": 0.976316,
-    "building_cells": 130120,
+    "building_cells": 130121,
     "max_height_agl_m": 547.8720092773438,
     "sources": [
       {
@@ -73,7 +73,7 @@
       },
       {
         "key": "usgs_3dep_lidar",
-        "product_id": "NY_NewYorkCity; TNM: 16 TNM tiles of NY_New_York_CMGP_SANDY_LiDAR_15",
+        "product_id": "NY_NewYorkCity; classes [6, 17]; 16 TNM tiles of NY_New_York_CMGP_SANDY_LiDAR_15",
         "licence": "Public domain (US Government work, USGS)",
         "captured": "2013-08-05 .. 2014-04-21",
         "published": "2015-04-14"
@@ -86,7 +86,7 @@
         "published": "2026-10-25"
       }
     ],
-    "code_commit": "ac732305d6502676762065561cae5aa2c4fb036c",
+    "code_commit": "11af9d1ca6b2bf226decf7df828d7be9a2d47b81",
     "dirty": true,
     "excluded_cells": 5823
   },
@@ -144,27 +144,27 @@
   ],
   "cached_artifacts": [
     {
-      "key": "urban_physics/nyc_harbor/2d463a17d58b58d0/payload.bin",
-      "path": "urban_physics/nyc_harbor/2d463a17d58b58d0/payload.bin",
+      "key": "urban_physics/nyc_harbor/983838d2b68e5117/payload.bin",
+      "path": "urban_physics/nyc_harbor/983838d2b68e5117/payload.bin",
       "bytes": 4437000,
-      "sha256": "138295a8d37bc9732cebe60a039a94e0f5e80f0563d90fbb597430743ae77529",
-      "fetched_at": "2026-10-27T20:54:22Z",
+      "sha256": "4f9efffe34d15528edc07d41c9629a77161fa91a818a7dfd72b4975bf88ef56b",
+      "fetched_at": "2026-10-27T20:59:45Z",
       "url": "derived"
     },
     {
-      "key": "urban_physics/nyc_harbor/2d463a17d58b58d0/metadata.json",
-      "path": "urban_physics/nyc_harbor/2d463a17d58b58d0/metadata.json",
-      "bytes": 4725,
-      "sha256": "8cd55d6602973d03bb6fe80816fed82e024735a67f20fd94c71a3813ed65ff35",
-      "fetched_at": "2026-10-27T20:54:22Z",
+      "key": "urban_physics/nyc_harbor/983838d2b68e5117/metadata.json",
+      "path": "urban_physics/nyc_harbor/983838d2b68e5117/metadata.json",
+      "bytes": 4737,
+      "sha256": "76559a47168f76c880b2cf2cedb1bd65b9c52c1f5283780724deb56b65cbea0e",
+      "fetched_at": "2026-10-27T20:59:45Z",
       "url": "derived"
     },
     {
-      "key": "urban_physics/nyc_harbor/2d463a17d58b58d0/descriptor.json",
-      "path": "urban_physics/nyc_harbor/2d463a17d58b58d0/descriptor.json",
+      "key": "urban_physics/nyc_harbor/983838d2b68e5117/descriptor.json",
+      "path": "urban_physics/nyc_harbor/983838d2b68e5117/descriptor.json",
       "bytes": 360,
-      "sha256": "cfabfa9c3c8ea38e981a6907a8c586770020f1bf6bdb6eab14e8c1c89cd73f1f",
-      "fetched_at": "2026-10-27T20:54:22Z",
+      "sha256": "258556e9c5a09482ac23efe703936eaed40383373c8894662af1e3af157e5942",
+      "fetched_at": "2026-10-27T20:59:45Z",
       "url": "derived"
     },
     {
@@ -176,11 +176,11 @@
       "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer"
     },
     {
-      "key": "urban_lidar/nyc_harbor/997eeb1b1c/10m",
-      "path": "urban_src/nyc_harbor_997eeb1b1c_lidar_subset.npz",
-      "bytes": 272739086,
-      "sha256": "958fcbe05bdd6f148f2760041fca1c20081e21df4f4eb498e89d3a6040f63de4",
-      "fetched_at": "2026-10-27T20:52:32Z",
+      "key": "urban_lidar_rasters/nyc_harbor/997eeb1b1c/10m",
+      "path": "urban_src/nyc_harbor_997eeb1b1c_lidar_cells.npz",
+      "bytes": 7918769,
+      "sha256": "cc6d3642d2a1b45e8b5a7cb94e73c78e76d798ee62843c517ed21804cba2e2d4",
+      "fetched_at": "2026-10-27T20:59:44Z",
       "url": "https://usgs-lidar-public.s3.amazonaws.com/NY_NewYorkCity/ept.json"
     },
     {
@@ -192,5 +192,5 @@
       "url": "https://data.cityofnewyork.us/resource/5zhs-2jue.json?$select=the_geom,height_roof,ground_elevation,last_edited_date,last_status_type,geom_source&$where=within_box(the_geom,40.69457453835943,-74.02588828636205,40.74046509852127,-73.96402959354405)&$limit=200000"
     }
   ],
-  "generated_at": "2026-10-27T20:54:22Z"
+  "generated_at": "2026-10-27T20:59:45Z"
 }

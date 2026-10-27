@@ -29,12 +29,11 @@
       "buffer_m": 2000,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure. Kept clear of extracted geometry, camera framing and every presentation effect, so nothing can read as happening at an airport."
+      "reason": "Civil aviation infrastructure. Kept clear of extracted geometry and every presentation effect, so nothing can read as happening at an airport. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "civil airport operating area (coast)",
@@ -45,12 +44,11 @@
       "buffer_m": 1000,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure near the shore; kept clear of extracted geometry, camera framing and every presentation effect."
+      "reason": "Civil aviation infrastructure near the shore; kept clear of extracted geometry and every presentation effect. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "civil airport operating area (north)",
@@ -61,12 +59,11 @@
       "buffer_m": 1500,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure on the basin's northern edge; kept clear of extracted geometry, camera framing and every presentation effect."
+      "reason": "Civil aviation infrastructure on the basin's northern edge; kept clear of extracted geometry and every presentation effect. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "civil airport operating area (north-west)",
@@ -77,12 +74,11 @@
       "buffer_m": 1500,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure in the north-western valley; kept clear of extracted geometry, camera framing and every presentation effect."
+      "reason": "Civil aviation infrastructure in the north-western valley; kept clear of extracted geometry and every presentation effect. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "civil airport operating area (south)",
@@ -93,12 +89,11 @@
       "buffer_m": 1000,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure in the southern basin; kept clear of extracted geometry, camera framing and every presentation effect."
+      "reason": "Civil aviation infrastructure in the southern basin; kept clear of extracted geometry and every presentation effect. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "civil airport operating area (east)",
@@ -109,12 +104,11 @@
       "buffer_m": 1000,
       "policies": [
         "airfield",
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Civil aviation infrastructure at the eastern edge; kept clear of extracted geometry, camera framing and every presentation effect."
+      "reason": "Civil aviation infrastructure at the eastern edge; kept clear of extracted geometry and every presentation effect. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "restricted federal property (south-west)",
@@ -124,12 +118,11 @@
       "north": 33.935,
       "buffer_m": 1500,
       "policies": [
-        "camera",
         "ambience",
         "extraction",
         "render_cutout"
       ],
-      "reason": "Restricted property on the south-western coast. Nothing here is extracted, framed, drawn or used as an effect origin; the box records only that the project stays out."
+      "reason": "Restricted property on the south-western coast. Nothing here is extracted, framed, drawn or used as an effect origin; the box records only that the project stays out. Camera framing is not restricted here: at city scale a 30 km, 110 degree cone around any downtown shot would contain it, so the zone is protected by extraction and the render cut-out instead."
     },
     {
       "name": "restricted research campus (north)",
