@@ -406,6 +406,19 @@ def test_a_different_length_blocks_resume():
     assert rm.resume_compatibility(_meta(), _meta(profile="full"))["ok"] is False
 
 
+def test_a_different_policy_family_blocks_resume_and_legacy_means_deepsets():
+    recurrent = _meta()
+    recurrent["config"]["policy_family"] = "recurrent"
+    result = rm.resume_compatibility(_meta(), recurrent)
+    assert result["ok"] is False
+    assert "config.policy_family" in result["changes"]
+
+    legacy = _meta()
+    for key in ("policy_family", "policy_version", "recurrent_seq_len"):
+        legacy["config"].pop(key)
+    assert rm.resume_compatibility(legacy, _meta())["ok"] is True
+
+
 def test_an_override_must_name_the_key_it_accepts():
     v = rm.resume_compatibility(
         _meta(), _meta(code={"commit": "cafe", "dirty": False}), overrides=["code.commit"]

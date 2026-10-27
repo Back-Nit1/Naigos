@@ -514,6 +514,7 @@ def checkpoint_provenance(path: str | os.PathLike, blob: dict) -> dict:
         "red_level_at_checkpoint": blob.get("red_level"),
         "trained_env_cfg": json.loads(json.dumps(blob.get("env_cfg"), default=str, sort_keys=True)),
         "obs_config": ckpt_mod.obs_config_from_blob(blob),
+        "policy": ckpt_mod.policy_identity(blob),
     }
 
 
@@ -578,7 +579,8 @@ def run_sweep(
             base_env_cfg = base_env_cfg.replace(**env_overrides)
         require_actor_compatible(blob["actor"], base_env_cfg, str(path))
         actor = blob["actor"]
-        make_policy = lambda cfg: greedy_policy(actor, cfg)  # noqa: E731
+        policy_kw = ckpt_mod.policy_kwargs(blob)
+        make_policy = lambda cfg: greedy_policy(actor, cfg, **policy_kw)  # noqa: E731
         policy_provenance = {"kind": "checkpoint", **checkpoint_provenance(path, blob)}
     else:
         if policy_provenance is None:

@@ -40,6 +40,7 @@ from ..env.config import EnvConfig
 from ..env.flight_env import NaigosEnv
 from ..env.threats import red_scales_from_cfg
 from . import checkpoint as ckpt
+from . import policies
 from . import runmeta
 from .ppo import PPOConfig, greedy_policy, init_learner, init_rollout, make_train
 from .protocol_v2 import plateau_reason
@@ -266,9 +267,20 @@ def _resume_curriculum_state(
     )
 
 
-def evaluate(env: NaigosEnv, actor_params, n_worlds: int, key, use_cbf: bool = False) -> dict:
+def evaluate(
+    env: NaigosEnv,
+    actor_params,
+    n_worlds: int,
+    key,
+    use_cbf: bool = False,
+    *,
+    policy_family: policies.PolicyFamily | str = policies.DEFAULT_POLICY_FAMILY,
+    policy_version: str = policies.DEFAULT_POLICY_VERSION,
+) -> dict:
     """Deterministic evaluation over full-length episodes."""
-    pol = greedy_policy(actor_params, env.cfg)
+    pol = greedy_policy(
+        actor_params, env.cfg, family=policy_family, version=policy_version
+    )
     afilter = None
     if use_cbf:
         from .cbf import CBFConfig, make_policy_filter
@@ -520,6 +532,11 @@ def run(
     env_cfg = env_cfg or EnvConfig()
     ppo_cfg = ppo_cfg or PPOConfig()
     train_cfg = train_cfg or TrainConfig()
+    policy_spec = policies.get_policy_spec(
+        env_cfg,
+        family=ppo_cfg.policy_family,
+        version=ppo_cfg.policy_version,
+    )
     plateau = train_cfg.plateau
     if plateau is not None and plateau.min_evaluations < 1:
         raise CurriculumError(f"plateau.min_evaluations must be at least 1, got {plateau.min_evaluations}")
@@ -549,7 +566,17 @@ def run(
         f"x{dev['device_count']} {', '.join(dev['devices']) or 'unknown'}"
     )
     if meta is not None:
-        meta = {**meta, "runtime": {**(meta.get("runtime") or {}), **dev}}
+        meta_config = {
+            **(meta.get("config") or {}),
+            "policy_family": policy_spec.family.value,
+            "policy_version": policy_spec.version,
+            "recurrent_seq_len": int(ppo_cfg.recurrent_seq_len),
+        }
+        meta = {
+            **meta,
+            "config": meta_config,
+            "runtime": {**(meta.get("runtime") or {}), **dev},
+        }
         meta, fresh = runmeta.write_metadata(out, meta)
         print(f"[run] {'wrote' if fresh else 'matched existing'} {out / runmeta.META_FILENAME}")
         persist()
@@ -560,6 +587,10 @@ def run(
         "n_envs": ppo_cfg.n_envs,
         "n_steps": ppo_cfg.n_steps,
         "n_blue": env_cfg.n_blue,
+        "policy_family": policy_spec.family.value,
+        "policy_version": policy_spec.version,
+        "policy_parameter_count": policy_spec.parameter_count,
+        "policy_spec_sha256": policy_spec.sha256,
         "env_steps_per_iteration": steps_per_iter,
         "agent_steps_per_iteration": steps_per_iter * env_cfg.n_blue,
     }
@@ -674,7 +705,9 @@ def run(
                 f"exp_early {base[tag+'_exposure_early']:.3f}"
             )
     else:
-        learner = ckpt.restore_learner(learner, blob)
+        learner = ckpt.restore_learner(
+            learner, blob, expected_policy=policy_spec
+        )
         key = ckpt.restore_key(blob)
         # The checkpoint's history, not the one on disk. `history.json` is
         # rewritten at every eval boundary and checkpoints are less frequent, so
@@ -758,13 +791,25 @@ def run(
         last = it == train_cfg.iterations or plateau_hit is not None
         if it % train_cfg.eval_every == 0 or it == 1 or last:
             key, k_eval = jax.random.split(key)
-            ev = evaluate(env, learner.actor.params, train_cfg.eval_worlds, k_eval, train_cfg.use_cbf)
+            ev = evaluate(
+                env, learner.actor.params, train_cfg.eval_worlds, k_eval,
+                train_cfg.use_cbf,
+                policy_family=ppo_cfg.policy_family,
+                policy_version=ppo_cfg.policy_version,
+            )
             shootdown_rate = ev["shootdown_rate"]
             survival_rate = ev["survival_rate"]
             if route_log is not None:
                 # reported, never fed back: the curricula stay on the training
                 # distribution's rates above
-                res = route_eval_row(it, "eval", "learner", greedy_policy(learner.actor.params, env.cfg))
+                res = route_eval_row(
+                    it, "eval", "learner",
+                    greedy_policy(
+                        learner.actor.params, env.cfg,
+                        family=ppo_cfg.policy_family,
+                        version=ppo_cfg.policy_version,
+                    ),
+                )
                 ev = {**ev, **route_history_scalars(res)}
                 h, g = res["heldout"]["aggregate"], res["train_geometry"]["aggregate"]
                 print(

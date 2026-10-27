@@ -132,6 +132,44 @@ def test_reroll_moves_threats_clears_tracks_and_keeps_terrain():
     assert jnp.allclose(st.hmap, st2.hmap)
 
 
+def test_live_simulation_carries_and_resets_recurrent_policy_memory():
+    """The frame-by-frame path must honor the same lifecycle as env.rollout."""
+    from naigos.demo.live import Simulation
+    from naigos.rl.ppo import PPOConfig, greedy_policy, init_learner
+
+    env = _env()
+    key = jax.random.PRNGKey(41)
+    _, obs = env.reset(key)
+    ppo = PPOConfig(policy_family="recurrent", recurrent_seq_len=4)
+    learner = init_learner(key, env.cfg, ppo, obs)
+    sim = Simulation(
+        env=env,
+        policy=greedy_policy(learner.actor.params, env.cfg, family="recurrent"),
+        georef=GeoRef(utm_epsg=32611, origin_easting_m=400_000.0,
+                      origin_northing_m=4_000_000.0),
+        reroll_s=0.0,
+    )
+    np.testing.assert_array_equal(np.asarray(sim.policy_memory), 0.0)
+
+    out = sim._step(sim.state, sim.obs, sim.policy_memory, key)
+    state2, obs2, memory2, *_ = out
+    assert memory2.shape == sim.policy_memory.shape
+    assert bool(np.any(np.asarray(memory2) != 0.0))
+
+    # A max-step world boundary resets every aircraft before another frame can
+    # consume the state. Individual respawns reset only their own row.
+    terminal = state2._replace(t=env.cfg.max_steps - 1)
+    out = sim._step(terminal, obs2, memory2, key)
+    np.testing.assert_array_equal(np.asarray(out[2]), 0.0)
+    sim.policy_memory = jnp.ones_like(memory2)
+    sim._reset_policy_memory(np.array([True, False, True, False]))
+    host_memory = np.asarray(sim.policy_memory)
+    np.testing.assert_array_equal(host_memory[[0, 2]], 0.0)
+    np.testing.assert_array_equal(host_memory[[1, 3]], 1.0)
+    sim._reset_policy_memory()  # threat-world reroll
+    np.testing.assert_array_equal(np.asarray(sim.policy_memory), 0.0)
+
+
 # ------------------------------------------------------------------ server ---
 def test_live_frames_are_wellformed_and_geolocated(theatre):
     """Drive the Simulation directly -- no socket, no thread, no flake."""

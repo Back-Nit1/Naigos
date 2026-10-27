@@ -41,6 +41,7 @@ from ..env.config import EnvConfig
 from ..env.flight_env import NaigosEnv
 from ..env.obs import Observation, flatten_global
 from . import networks as nets
+from . import policies
 from .reward import RewardWeights, compute as compute_reward, constraint_cost
 
 
@@ -57,6 +58,12 @@ class PPOConfig:
     vf_coef: float = 0.5
     ent_coef: float = 3e-3
     max_grad_norm: float = 0.5
+
+    # Static actor identity. DeepSets remains the default and keeps its exact
+    # flat-timestep PPO path; recurrent PPO shuffles fixed-length sequences.
+    policy_family: str = policies.DEFAULT_POLICY_FAMILY.value
+    policy_version: str = policies.DEFAULT_POLICY_VERSION
+    recurrent_seq_len: int = 32
 
     # --- CMDP / Lagrangian ---
     # Expected airframe losses per agent-episode. The cost channel is terminal
@@ -114,11 +121,21 @@ def masked_mean(x, mask):
 
 def init_learner(key, cfg: EnvConfig, ppo: PPOConfig, sample_obs: Observation) -> Learner:
     k_a, k_c = jax.random.split(key)
-    actor = nets.Actor(cfg)
+    actor = policies.create_actor(
+        cfg, family=ppo.policy_family, version=ppo.policy_version
+    )
     critic = nets.Critic()
 
-    ap = actor.init(k_a, sample_obs.ego, sample_obs.threats, sample_obs.threat_mask,
-                    sample_obs.friends, sample_obs.friend_mask)
+    memory = policies.initial_memory(
+        cfg, family=ppo.policy_family, version=ppo.policy_version
+    )
+    actor_inputs = (
+        sample_obs.ego, sample_obs.threats, sample_obs.threat_mask,
+        sample_obs.friends, sample_obs.friend_mask,
+    )
+    ap = actor.init(k_a, *actor_inputs) if memory is None else actor.init(
+        k_a, *actor_inputs, memory
+    )
     cp = critic.init(k_c, critic_inputs(sample_obs))
 
     tx = optax.chain(optax.clip_by_global_norm(ppo.max_grad_norm), optax.adam(ppo.lr))
@@ -167,11 +184,19 @@ def init_rollout(env: NaigosEnv, ppo: PPOConfig, key, red_scales=None):
     """
     keys = jax.random.split(key, ppo.n_envs)
     if red_scales is None:
-        return jax.vmap(env.reset)(keys)
-    return jax.vmap(env.reset, in_axes=(0, None))(keys, red_scales)
+        state, obs = jax.vmap(env.reset)(keys)
+    else:
+        state, obs = jax.vmap(env.reset, in_axes=(0, None))(keys, red_scales)
+    memory = policies.initial_memory(
+        env.cfg,
+        family=ppo.policy_family,
+        version=ppo.policy_version,
+        batch_shape=(ppo.n_envs,),
+    )
+    return (state, obs) if memory is None else (state, obs, memory)
 
 
-def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
+def _make_feedforward_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
     """Build a jit-able `train_step(learner, rollout, key) -> (learner, rollout, metrics)`."""
     cfg = env.cfg
     actor_apply = nets.Actor(cfg).apply
@@ -363,13 +388,286 @@ def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
     return train_step
 
 
-def greedy_policy(actor_params, cfg: EnvConfig):
+def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
+    """Sequence-minibatched PPO for the explicit-state GRU actor."""
+
+    cfg = env.cfg
+    seq_len = int(ppo.recurrent_seq_len)
+    if seq_len < 1 or ppo.n_steps % seq_len:
+        raise ValueError(
+            f"recurrent_seq_len ({seq_len}) must divide n_steps ({ppo.n_steps})"
+        )
+    n_sequences = (ppo.n_steps // seq_len) * ppo.n_envs * cfg.n_blue
+    if n_sequences % ppo.n_minibatches:
+        raise ValueError(
+            f"recurrent sequence count ({n_sequences}) must be divisible by "
+            f"n_minibatches ({ppo.n_minibatches})"
+        )
+
+    actor_apply = policies.create_actor(
+        cfg, family=ppo.policy_family, version=ppo.policy_version
+    ).apply
+    critic_apply = nets.Critic().apply
+    critic_per_agent = jax.vmap(critic_apply, in_axes=(None, 0))
+
+    def policy_step(params, obs: Observation, memory, key):
+        mean, log_std, next_memory = actor_apply(
+            params, obs.ego, obs.threats, obs.threat_mask,
+            obs.friends, obs.friend_mask, memory,
+        )
+        act, raw = nets.sample_action(mean, log_std, key)
+        return act, raw, nets.log_prob(mean, log_std, raw), next_memory
+
+    def collect(learner: Learner, rollout, key):
+        """Collect one segment while carrying one GRU state per aircraft."""
+
+        def one_world(state, obs, memory, k):
+            def body(carry, _):
+                st, ob, mem, kk = carry
+                kk, ka, kr = jax.random.split(kk, 3)
+                act, raw, lp, mem2 = policy_step(
+                    learner.actor.params, ob, mem, ka
+                )
+                gs = critic_inputs(ob)
+                v, vc = critic_per_agent(learner.critic.params, gs)
+                live = st.alive & ~st.reached
+                st2, ob2, terms, done, info = env.step(st, act)
+                r = compute_reward(terms, weights)
+                c = constraint_cost(terms)
+                agent_done_bool = info["agent_done"] | done
+                agent_done = agent_done_bool.astype(jnp.float32)
+                # A completed agent remains zero while its world finishes; a
+                # completed world is zero before the reset observation is used.
+                mem2 = policies.reset_memory(mem2, agent_done_bool | ~live)
+                st_r, ob_r = env.reset(kr, st.red_scales)
+                st2, ob2 = jax.tree.map(
+                    lambda a, b: jnp.where(done, a, b),
+                    (st_r, ob_r), (st2, ob2),
+                )
+                out = dict(
+                    ego=ob.ego, threats=ob.threats,
+                    threat_mask=ob.threat_mask, friends=ob.friends,
+                    friend_mask=ob.friend_mask, memory=mem,
+                    gs=gs, raw=raw, logp=lp, v=v, vc=vc, r=r, c=c,
+                    d=agent_done, live=live, shot=terms.shotdown,
+                    arrived=terms.arrived, exposure=terms.exposure,
+                    progress=terms.progress, reset=done.astype(jnp.float32),
+                )
+                return (st2, ob2, mem2, kk), out
+
+            (st_f, ob_f, mem_f, _), traj = jax.lax.scan(
+                body, (state, obs, memory, k), None, length=ppo.n_steps
+            )
+            v_last, vc_last = critic_per_agent(
+                learner.critic.params, critic_inputs(ob_f)
+            )
+            return traj, v_last, vc_last, (st_f, ob_f, mem_f)
+
+        state, obs, memory = rollout
+        keys = jax.random.split(key, ppo.n_envs)
+        traj, v_last, vc_last, rollout = jax.vmap(one_world)(
+            state, obs, memory, keys
+        )
+        traj = jax.tree.map(lambda x: jnp.swapaxes(x, 0, 1), traj)
+        return traj, v_last, vc_last, rollout
+
+    def loss_fn(actor_params, critic_params, lam, batch):
+        # Each item is a chronological sequence. Recompute recurrent outputs
+        # from the exact hidden state that collection stored at its first step.
+        xs = tuple(
+            jnp.swapaxes(batch[name], 0, 1)
+            for name in (
+                "ego", "threats", "threat_mask", "friends", "friend_mask", "d"
+            )
+        )
+
+        def actor_step(memory, x):
+            ego, threats, threat_mask, friends, friend_mask, done = x
+            mean, log_std, memory = actor_apply(
+                actor_params, ego, threats, threat_mask, friends, friend_mask, memory
+            )
+            memory = policies.reset_memory(memory, done)
+            return memory, (mean, log_std)
+
+        _, (mean, log_std) = jax.lax.scan(actor_step, batch["memory"], xs)
+        mean, log_std = jnp.swapaxes(mean, 0, 1), jnp.swapaxes(log_std, 0, 1)
+        logp = nets.log_prob(mean, log_std, batch["raw"])
+        ratio = jnp.exp(logp - batch["logp"])
+
+        live = batch["live"]
+        adv = batch["adv"] - lam * batch["adv_c"]
+        adv_mean = masked_mean(adv, live)
+        adv_std = jnp.sqrt(masked_mean((adv - adv_mean) ** 2, live))
+        adv = (adv - adv_mean) / (adv_std + 1e-8)
+        pg1 = ratio * adv
+        pg2 = jnp.clip(ratio, 1 - ppo.clip_eps, 1 + ppo.clip_eps) * adv
+        pg_loss = -masked_mean(jnp.minimum(pg1, pg2), live)
+        ent = masked_mean(nets.entropy(log_std), live)
+
+        v, vc = critic_apply(critic_params, batch["gs"])
+        v_loss = masked_mean((v - batch["ret"]) ** 2, live) + masked_mean(
+            (vc - batch["ret_c"]) ** 2, live
+        )
+        total = pg_loss + ppo.vf_coef * v_loss - ppo.ent_coef * ent
+        return total, {
+            "pg_loss": pg_loss, "v_loss": v_loss, "entropy": ent,
+            "ratio": jnp.mean(ratio),
+        }
+
+    def sequence_batch(tree):
+        """(time, env, agent, ...) -> (sequence, seq_len, ...)."""
+        chunks = ppo.n_steps // seq_len
+
+        def one(x):
+            tail = x.shape[3:]
+            x = x.reshape((chunks, seq_len) + x.shape[1:])
+            x = jnp.transpose(x, (0, 2, 3, 1, *range(4, x.ndim)))
+            return x.reshape((-1, seq_len) + tail)
+
+        return jax.tree.map(one, tree)
+
+    def train_step(learner: Learner, rollout, key):
+        k_roll, k_shuf = jax.random.split(key)
+        traj, v_last, vc_last, rollout = collect(learner, rollout, k_roll)
+        adv, ret = gae(
+            traj["r"], traj["v"], traj["d"], v_last,
+            ppo.gamma, ppo.gae_lambda,
+        )
+        adv_c, ret_c = gae(
+            traj["c"], traj["vc"], traj["d"], vc_last,
+            ppo.cost_gamma, ppo.gae_lambda,
+        )
+
+        live = traj["live"]
+        cost_accum = learner.cost_accum + jnp.sum(traj["c"] * live)
+        episode_accum = learner.episode_accum + jnp.sum(traj["d"] * live)
+        j_cost = jnp.where(
+            episode_accum > 0,
+            cost_accum / jnp.maximum(episode_accum, 1.0), 0.0,
+        )
+        violation = j_cost - ppo.cost_budget
+        lam_eff = jnp.clip(
+            lam_value(learner.lam_raw)
+            + ppo.lambda_kp * jnp.maximum(violation, 0.0),
+            0.0, ppo.lambda_max,
+        )
+
+        sequences = sequence_batch({
+            **{
+                k: traj[k]
+                for k in (
+                    "ego", "threats", "threat_mask", "friends", "friend_mask",
+                    "raw", "logp", "gs", "live", "d",
+                )
+            },
+            "adv": adv, "ret": ret, "adv_c": adv_c, "ret_c": ret_c,
+        })
+        # Only the chunk-entry state is an input to truncated BPTT.
+        sequences["memory"] = sequence_batch(traj["memory"])[:, 0]
+        n = sequences["adv"].shape[0]
+        mb = n // ppo.n_minibatches
+
+        def epoch(carry, ek):
+            actor, critic = carry
+            perm = jax.random.permutation(ek, n)
+
+            def minibatch(carry2, i):
+                actor, critic = carry2
+                idx = jax.lax.dynamic_slice(perm, (i * mb,), (mb,))
+                batch = jax.tree.map(lambda x: x[idx], sequences)
+                grads, aux = jax.grad(
+                    lambda ap, cp: loss_fn(ap, cp, lam_eff, batch),
+                    argnums=(0, 1), has_aux=True,
+                )(actor.params, critic.params)
+                actor = actor.apply_gradients(grads=grads[0])
+                critic = critic.apply_gradients(grads=grads[1])
+                return (actor, critic), aux
+
+            (actor, critic), aux = jax.lax.scan(
+                minibatch, (actor, critic), jnp.arange(ppo.n_minibatches)
+            )
+            return (actor, critic), aux
+
+        (actor, critic), aux = jax.lax.scan(
+            epoch, (learner.actor, learner.critic),
+            jax.random.split(k_shuf, ppo.n_epochs),
+        )
+        lam_grad = -violation * jax.nn.sigmoid(learner.lam_raw)
+        opt = optax.adam(ppo.lr_lambda)
+        updates, lam_opt = opt.update(lam_grad, learner.lam_opt, learner.lam_raw)
+        lam_raw = optax.apply_updates(learner.lam_raw, updates)
+        lam_raw = jnp.clip(
+            lam_raw, -10.0, jnp.log(jnp.expm1(ppo.lambda_max))
+        )
+
+        ret_var = masked_mean((ret - masked_mean(ret, live)) ** 2, live)
+        err = ret - traj["v"]
+        err_var = masked_mean((err - masked_mean(err, live)) ** 2, live)
+        metrics = {
+            "reward": jnp.mean(jnp.sum(traj["r"], axis=0)),
+            "cost": j_cost, "lambda": lam_eff,
+            "lambda_integral": lam_value(lam_raw),
+            "cost_violation": violation,
+            "shootdown_rate": jnp.mean(jnp.sum(traj["shot"], axis=0)),
+            "arrival_rate": jnp.mean(jnp.sum(traj["arrived"], axis=0)),
+            "exposure": jnp.mean(traj["exposure"]),
+            "progress_km": jnp.mean(jnp.sum(traj["progress"], axis=0)) / 1000.0,
+            "episodes_completed": jnp.sum(traj["reset"]),
+            "live_frac": jnp.mean(live.astype(jnp.float32)),
+            "explained_var": jnp.where(
+                ret_var > 0,
+                1.0 - err_var / jnp.where(ret_var > 0, ret_var, 1.0), 0.0,
+            ),
+            **jax.tree.map(jnp.mean, aux),
+        }
+        return Learner(
+            actor=actor, critic=critic, lam_raw=lam_raw, lam_opt=lam_opt,
+            cost_accum=cost_accum, episode_accum=episode_accum,
+        ), rollout, metrics
+
+    train_step.collect = collect
+    train_step.loss_fn = loss_fn
+    return train_step
+
+
+def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
+    """Build the policy-family-specific jittable PPO update."""
+
+    spec = policies.get_policy_spec(
+        env.cfg, family=ppo.policy_family, version=ppo.policy_version
+    )
+    if spec.memory_requirements.recurrent:
+        return _make_recurrent_train(env, ppo, weights)
+    return _make_feedforward_train(env, ppo, weights)
+
+
+def greedy_policy(
+    actor_params,
+    cfg: EnvConfig,
+    *,
+    family: policies.PolicyFamily | str = policies.DEFAULT_POLICY_FAMILY,
+    version: str = policies.DEFAULT_POLICY_VERSION,
+):
     """Deterministic policy for evaluation and for the demo replay.
 
     `mean` is the actor's pre-squash location (see `nets.Actor`); the
     deterministic action is its mode after squashing, `tanh(mean)`.
     """
-    apply = nets.Actor(cfg).apply
+    actor = policies.create_actor(cfg, family=family, version=version)
+    apply = actor.apply
+    memory = policies.initial_memory(cfg, family=family, version=version)
+
+    if memory is not None:
+        def recurrent_pol(obs: Observation, key, memory):
+            mean, _, memory = apply(
+                actor_params, obs.ego, obs.threats, obs.threat_mask,
+                obs.friends, obs.friend_mask, memory,
+            )
+            return jnp.tanh(mean), memory
+
+        # `NaigosEnv.rollout` detects this explicit deployment lifecycle.
+        recurrent_pol.initial_memory = memory
+        return recurrent_pol
 
     def pol(obs: Observation, key):
         mean, _ = apply(actor_params, obs.ego, obs.threats, obs.threat_mask, obs.friends, obs.friend_mask)

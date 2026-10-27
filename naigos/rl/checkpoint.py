@@ -60,6 +60,8 @@ in this module reads pickle, by design.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -69,6 +71,7 @@ import numpy as np
 import orbax.checkpoint as ocp
 
 from . import runmeta
+from . import policies
 from .ppo import Learner
 from .red_team import RedCurriculum
 from .reward import RewardCurriculum, RewardWeights
@@ -235,6 +238,11 @@ def save(
     # Orbax requires an absolute checkpoint path; callers (train.py, CLI tools)
     # commonly pass a relative one.
     path = Path(path).resolve()
+    policy_spec = policies.get_policy_spec(
+        env_cfg,
+        family=ppo_cfg.policy_family,
+        version=ppo_cfg.policy_version,
+    )
     blob = {
         # --- unchanged policy-export surface: the demo reads these ---
         "schema": CHECKPOINT_SCHEMA,
@@ -244,6 +252,12 @@ def save(
         "red_level": float(red_level),
         "iter": int(iteration),
         "env_cfg": dataclasses.asdict(env_cfg),
+        "policy": {
+            "family": policy_spec.family.value,
+            "version": policy_spec.version,
+            "spec": policy_spec.to_dict(),
+            "spec_sha256": policy_spec.sha256,
+        },
         # --- everything needed to continue ---
         "recovery": {
             "iteration": int(iteration),
@@ -301,6 +315,76 @@ def load(path: str | os.PathLike) -> dict:
     if not isinstance(blob, dict) or "actor" not in blob:
         raise CheckpointError(f"{path} is not a Naigos checkpoint")
     return blob
+
+
+def policy_identity(blob: dict) -> dict:
+    """Return validated actor identity, migrating metadata-free checkpoints.
+
+    Schema-4 checkpoints written before the model ladder are unambiguously
+    ``deepsets@1``. They remain deployable/resumable under that family, while a
+    caller asking for a recurrent actor is refused before parameter grafting.
+    """
+
+    record = blob.get("policy")
+    if record is None:
+        return {
+            "family": policies.DEFAULT_POLICY_FAMILY.value,
+            "version": policies.DEFAULT_POLICY_VERSION,
+            "spec": None,
+            "spec_sha256": None,
+            "migrated_legacy_default": True,
+        }
+    if not isinstance(record, dict):
+        raise CheckpointError("checkpoint policy metadata is not an object")
+    family, version = record.get("family"), str(record.get("version", ""))
+    try:
+        policies.PolicyFamily(family)
+    except (TypeError, ValueError) as exc:
+        raise CheckpointError(f"checkpoint has unknown policy family {family!r}") from exc
+    spec, digest = record.get("spec"), record.get("spec_sha256")
+    if spec is not None:
+        actual = hashlib.sha256(
+            json.dumps(spec, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if digest != actual:
+            raise CheckpointError(
+                "checkpoint policy metadata digest does not match its specification"
+            )
+    return {
+        "family": family,
+        "version": version,
+        "spec": spec,
+        "spec_sha256": digest,
+        "migrated_legacy_default": False,
+    }
+
+
+def assert_policy_compatible(blob: dict, expected: policies.PolicySpec) -> None:
+    """Refuse loading actor weights under a different family/version/spec."""
+
+    saved = policy_identity(blob)
+    want = (expected.family.value, expected.version)
+    got = (saved["family"], saved["version"])
+    if got != want:
+        raise CheckpointError(
+            f"checkpoint policy is {got[0]}@{got[1]}, but this run requested "
+            f"{want[0]}@{want[1]}"
+        )
+    # Legacy DeepSets checkpoints have no full contract to compare. Concrete
+    # PyTree grafting remains the final shape/dtype compatibility check.
+    digest = saved.get("spec_sha256")
+    if digest is not None and digest != expected.sha256:
+        raise CheckpointError(
+            "checkpoint policy specification differs from the requested actor "
+            f"(checkpoint {digest}, requested {expected.sha256})"
+        )
+
+
+def policy_kwargs(blob: dict) -> dict[str, str]:
+    """Keyword arguments for ``ppo.greedy_policy`` from checkpoint metadata."""
+
+    identity = policy_identity(blob)
+    return {"family": identity["family"], "version": identity["version"]}
 
 
 def is_resumable(path: str | os.PathLike) -> bool:
@@ -370,13 +454,20 @@ def curriculum_compatibility(
     return problems
 
 
-def restore_learner(template: Learner, blob: dict) -> Learner:
+def restore_learner(
+    template: Learner,
+    blob: dict,
+    *,
+    expected_policy: policies.PolicySpec | None = None,
+) -> Learner:
     """Graft a checkpoint's arrays onto a freshly initialised learner.
 
     `template` must come from `init_learner` with the same configuration, so the
     optimizer transformations, the network structure and the multiplier's Adam
     state are the ones this code builds. Only the values come from disk.
     """
+    if expected_policy is not None:
+        assert_policy_compatible(blob, expected_policy)
     rec = blob.get("recovery")
     if not isinstance(rec, dict):
         raise CheckpointError(
