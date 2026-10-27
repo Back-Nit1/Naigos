@@ -447,8 +447,17 @@ class NaigosEnv:
         h = dt / cfg.substeps
         air_next = state.air
         if cfg.weather.enabled:
+            mechanical = (
+                urban_mod.mechanical_wake_intensity(
+                    self.urban_surface, state.hmap, cfg.terrain,
+                    state.air.pos, state.weather.mean_wind_enu,
+                )
+                if cfg.urban.enabled
+                else jnp.zeros((cfg.n_blue,), dtype=jnp.float32)
+            )
             weather_next = weather_mod.step(
-                cfg.weather, state.weather, state.air.pos[:, 2], state.air.speed, dt, state.t
+                cfg.weather, state.weather, state.air.pos[:, 2], state.air.speed, dt, state.t,
+                mechanical,
             )
         else:
             weather_next = state.weather
@@ -478,6 +487,14 @@ class NaigosEnv:
             ),
             turbulence_intensity=jnp.where(
                 frozen, state.weather.turbulence_intensity, weather_next.turbulence_intensity
+            ),
+            background_turbulence_intensity=jnp.where(
+                frozen, state.weather.background_turbulence_intensity,
+                weather_next.background_turbulence_intensity,
+            ),
+            mechanical_turbulence_intensity=jnp.where(
+                frozen, state.weather.mechanical_turbulence_intensity,
+                weather_next.mechanical_turbulence_intensity,
             ),
             estimated_wind_enu=jnp.where(
                 frozen[:, None], state.weather.estimated_wind_enu, weather_next.estimated_wind_enu
@@ -683,6 +700,8 @@ class NaigosEnv:
             "mean_wind_enu": weather.mean_wind_enu,
             "gust_enu": weather.gust_enu,
             "density_ratio": weather.density_ratio,
+            "background_turbulence": weather.background_turbulence_intensity,
+            "mechanical_turbulence": weather.mechanical_turbulence_intensity,
             "obstacle_clearance": obstacle_clearance,
             "building_collision": building_hit,
             "air_velocity": af_mod.velocity(air),
@@ -761,6 +780,14 @@ class NaigosEnv:
             temperature_k=jnp.where(mask, fresh_weather.temperature_k, state.weather.temperature_k),
             sensing_attenuation=jnp.where(mask, fresh_weather.sensing_attenuation, state.weather.sensing_attenuation),
             turbulence_intensity=jnp.where(mask, fresh_weather.turbulence_intensity, state.weather.turbulence_intensity),
+            background_turbulence_intensity=jnp.where(
+                mask, fresh_weather.background_turbulence_intensity,
+                state.weather.background_turbulence_intensity,
+            ),
+            mechanical_turbulence_intensity=jnp.where(
+                mask, fresh_weather.mechanical_turbulence_intensity,
+                state.weather.mechanical_turbulence_intensity,
+            ),
             estimated_wind_enu=jnp.where(m, fresh_weather.estimated_wind_enu, state.weather.estimated_wind_enu),
             estimated_density_ratio=jnp.where(mask, fresh_weather.estimated_density_ratio, state.weather.estimated_density_ratio),
             stream_key=fresh_weather.stream_key,
@@ -840,6 +867,8 @@ class NaigosEnv:
             "mean_wind_enu": state2.weather.mean_wind_enu,
             "gust_enu": state2.weather.gust_enu,
             "density_ratio": state2.weather.density_ratio,
+            "background_turbulence": state2.weather.background_turbulence_intensity,
+            "mechanical_turbulence": state2.weather.mechanical_turbulence_intensity,
             "air_velocity": af_mod.velocity(state2.air),
             "ground_velocity": info["ground_velocity"],
             "mission_stage_before": state.mission.current_stage,
@@ -901,6 +930,8 @@ class NaigosEnv:
             "mean_wind_enu": info["mean_wind_enu"],
             "gust_enu": info["gust_enu"],
             "density_ratio": info["density_ratio"],
+            "background_turbulence": info["background_turbulence"],
+            "mechanical_turbulence": info["mechanical_turbulence"],
             "air_velocity": info["air_velocity"],
             "ground_velocity": info["ground_velocity"],
             "mission_stage": state2.mission.current_stage,

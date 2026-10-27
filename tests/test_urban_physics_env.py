@@ -110,6 +110,19 @@ def test_urban_los_masks_a_ray_that_bare_terrain_does_not(cfg, grid):
     assert float(bare) > 40.0 and float(city) < 0.0
 
 
+def test_building_wake_surrogate_uses_only_validated_surface(cfg, grid):
+    s = _surface(cfg, grid)
+    hmap = jnp.zeros((cfg.terrain.ny, cfg.terrain.nx))
+    y = s.origin_y_m + 5.5 * s.cell_m
+    downwind = jnp.array([[s.origin_x_m + 9.5 * s.cell_m, y, 100.0]])
+    sigma = urban.mechanical_wake_intensity(s, hmap, cfg.terrain, downwind, jnp.array([[25.0, 0.0, 0.0]]))
+    clear = urban.mechanical_wake_intensity(
+        s, hmap, cfg.terrain, jnp.array([[100.0, 100.0, 100.0]]), jnp.array([[25.0, 0.0, 0.0]])
+    )
+    assert float(sigma[0]) > 0.0 and float(sigma[0]) <= 25.0
+    assert float(clear[0]) == 0.0
+
+
 def test_presentation_payload_is_ignored_when_urban_physics_is_disabled():
     base = EnvConfig(n_blue=1, n_threat=2, n_threat_active=0, k_friend_obs=0, max_steps=2)
     a = NaigosEnv(base)

@@ -32,6 +32,8 @@ class WeatherState(NamedTuple):
     temperature_k: jax.Array  # (B,)
     sensing_attenuation: jax.Array  # (B,)
     turbulence_intensity: jax.Array  # (B,), stationary one-sigma m/s
+    background_turbulence_intensity: jax.Array  # (B,)
+    mechanical_turbulence_intensity: jax.Array  # (B,), evidence-grade urban surrogate
     estimated_wind_enu: jax.Array  # (B, 3), local/noisy actor estimate
     estimated_density_ratio: jax.Array  # (B,)
     stream_key: jax.Array  # (2,), named weather stream root
@@ -89,6 +91,8 @@ def initial_state(cfg: WeatherConfig, episode_key: jax.Array, altitude_m: jax.Ar
         temperature_k=truth["temperature_k"],
         sensing_attenuation=truth["sensing_attenuation"],
         turbulence_intensity=truth["turbulence_intensity"],
+        background_turbulence_intensity=truth["turbulence_intensity"],
+        mechanical_turbulence_intensity=jnp.zeros_like(truth["turbulence_intensity"]),
         estimated_wind_enu=estimate,
         estimated_density_ratio=density_est,
         stream_key=root,
@@ -102,9 +106,14 @@ def step(
     true_airspeed_mps: jax.Array,
     dt: float,
     step_index: jax.Array,
+    mechanical_intensity: jax.Array | None = None,
 ) -> WeatherState:
     """Advance the bounded AR(1) gust recursion exactly once per env step."""
     truth = profile_at(cfg, altitude_m)
+    background = truth["turbulence_intensity"]
+    mechanical = (jnp.zeros_like(background) if mechanical_intensity is None
+                  else jnp.maximum(mechanical_intensity, 0.0))
+    truth["turbulence_intensity"] = jnp.sqrt(background * background + mechanical * mechanical)
     scales = jnp.asarray(cfg.scale_length_m, dtype=jnp.float32)
     tau = scales[None, :] / jnp.maximum(true_airspeed_mps[:, None], 1.0)
     a = jnp.exp(-dt / jnp.maximum(tau, 1e-3))
@@ -122,6 +131,8 @@ def step(
         temperature_k=truth["temperature_k"],
         sensing_attenuation=truth["sensing_attenuation"],
         turbulence_intensity=truth["turbulence_intensity"],
+        background_turbulence_intensity=background,
+        mechanical_turbulence_intensity=mechanical,
         estimated_wind_enu=estimate,
         estimated_density_ratio=density_est,
         stream_key=state.stream_key,

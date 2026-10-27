@@ -119,3 +119,27 @@ def los_clearance(
 def visibility(surface, hmap, tcfg, dcfg, p_from, p_to):
     c = los_clearance(surface, hmap, tcfg, dcfg, p_from, p_to)
     return jax.nn.sigmoid(c / dcfg.los_clearance_scale)
+
+
+def mechanical_wake_intensity(surface: UrbanSurface, hmap, tcfg: TerrainConfig, pos, mean_wind_enu):
+    """Deterministic building-wake surrogate, returning local gust sigma (m/s).
+
+    Four broad-phase samples look upwind along the incoming flow. A structure's
+    height, downwind distance, wind speed, and height above its roof determine a
+    bounded decaying intensity. This is an engineering roughness/wake surrogate,
+    not CFD; the interface can later be replaced by a hashed directional field.
+    """
+    wind_xy = mean_wind_enu[..., :2]
+    speed = jnp.linalg.norm(wind_xy, axis=-1)
+    direction = wind_xy / jnp.maximum(speed[:, None], 1e-3)
+    multiples = jnp.asarray([1.0, 2.0, 4.0, 8.0], dtype=jnp.float32)
+    dist = multiples[None, :] * surface.cell_m
+    upstream = pos[:, None, :2] - dist[..., None] * direction[:, None, :]
+    top, building, _ = sample(surface, hmap, tcfg, upstream[..., 0], upstream[..., 1])
+    ground = terrain_mod.sample_height(hmap, tcfg, upstream[..., 0], upstream[..., 1])
+    height = jnp.maximum(top - ground, 1.0)
+    above = jnp.maximum(pos[:, None, 2] - top, 0.0)
+    decay = jnp.exp(-dist / jnp.maximum(10.0 * height, surface.cell_m))
+    vertical = jnp.exp(-above / jnp.maximum(height, 1.0))
+    sigma = 0.22 * speed[:, None] * decay * vertical * building.astype(jnp.float32)
+    return jnp.clip(jnp.max(sigma, axis=-1), 0.0, 25.0)
