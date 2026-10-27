@@ -39,6 +39,7 @@ TERMINATION_CAUSES = {
     "out_of_fuel": 5,
     "timeout": 6,
     "external_reset": 7,
+    "building": 8,
     "other": 255,
 }
 

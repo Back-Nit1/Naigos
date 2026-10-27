@@ -304,6 +304,8 @@ def _validate_core_semantics(arrays: Mapping[str, np.ndarray]) -> None:
         "terrain_violation", "ceiling_violation", "stall_violation",
         "bounds_violation", "out_of_fuel", "edge_proximity",
     )
+    if "reward/building_collision" in arrays:
+        bounded_reward_fields += ("building_collision",)
     for short_name in bounded_reward_fields:
         value = arrays[f"reward/{short_name}"]
         if np.any(value < 0) or np.any(value > 1):
@@ -328,7 +330,8 @@ def _validate_core_semantics(arrays: Mapping[str, np.ndarray]) -> None:
     if np.any(reached_event & ~arrays["status/reached"]):
         raise SchemaError("a reached termination cause requires status/reached=true")
     loss_codes = np.array(
-        [TERMINATION_CAUSES[name] for name in ("shot_down", "terrain", "out_of_bounds")], dtype=np.uint8
+        [TERMINATION_CAUSES[name] for name in ("shot_down", "terrain", "building", "out_of_bounds")],
+        dtype=np.uint8,
     )
     if np.any(np.isin(causes, loss_codes) & arrays["status/alive"]):
         raise SchemaError("shot-down, terrain, and out-of-bounds terminal events require status/alive=false")
@@ -338,18 +341,21 @@ def _validate_core_semantics(arrays: Mapping[str, np.ndarray]) -> None:
     # every event; this precedence matches the independent verifier, which does
     # not attribute a terrain/bounds loss to a firing solution as well.
     primary = np.zeros_like(causes)
-    for cause_name, reward_name in (
-        ("terrain", "reward/terrain_violation"),
+    precedence = [("terrain", "reward/terrain_violation")]
+    if "reward/building_collision" in arrays:
+        precedence.append(("building", "reward/building_collision"))
+    precedence.extend((
         ("out_of_bounds", "reward/bounds_violation"),
         ("shot_down", "reward/shotdown"),
         ("reached", "reward/arrived"),
-    ):
+    ))
+    for cause_name, reward_name in precedence:
         event = arrays[reward_name] > 0.5
         primary = np.where((primary == 0) & event, TERMINATION_CAUSES[cause_name], primary)
     has_primary_event = primary != 0
     if np.any(has_primary_event & (causes != primary)):
         raise SchemaError(
-            "status/termination_cause must use terrain > out_of_bounds > shot_down > reached precedence"
+            "status/termination_cause must use terrain > building > out_of_bounds > shot_down > reached precedence"
         )
     fuel_cause = causes == TERMINATION_CAUSES["out_of_fuel"]
     if np.any(fuel_cause & (arrays["reward/out_of_fuel"] <= 0.5)):
@@ -374,6 +380,7 @@ def _validate_core_semantics(arrays: Mapping[str, np.ndarray]) -> None:
     expected_cost = np.clip(
         arrays["reward/shotdown"]
         + arrays["reward/terrain_violation"]
+        + arrays.get("reward/building_collision", 0.0)
         + arrays["reward/bounds_violation"]
         + arrays["reward/out_of_fuel"],
         0,
