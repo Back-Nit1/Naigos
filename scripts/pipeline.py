@@ -2,7 +2,7 @@
 """Operate the cloud learning pipeline: status, inspect, promote, pause, resume.
 
     modal token new                                       # once, on any machine
-    modal deploy naigos/rl/modal_pipeline.py              # the only step that needs this laptop
+    modal deploy -m naigos.rl.modal_pipeline              # the only step that needs this laptop
     uv run python scripts/pipeline.py status              # any time, from any clone
     uv run python scripts/pipeline.py list-candidates
     uv run python scripts/pipeline.py inspect <id>        # s-... | c-... | g<N> | champion
@@ -46,7 +46,7 @@ from naigos.rl import runmeta  # noqa: E402
 from naigos.rl.modal_pipeline import APP_NAME  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
-DEPLOY_HINT = "modal deploy naigos/rl/modal_pipeline.py"
+DEPLOY_HINT = "modal deploy -m naigos.rl.modal_pipeline"
 
 
 # --- transport ---------------------------------------------------------------------

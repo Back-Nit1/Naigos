@@ -8,14 +8,14 @@ algorithm.
 The operational flow, in the order it has to happen:
 
     modal token new                                          # 1. authenticate
-    modal deploy naigos/rl/modal_train.py                     # 2. publish the app
+    modal deploy -m naigos.rl.modal_train                     # 2. publish the app
     uv run python scripts/modal_runs.py submit --profile smoke # 3. detached smoke
     uv run python scripts/modal_runs.py status <run-name>      # 4. verify it
     uv run python scripts/modal_runs.py submit --profile short # 5. detached run
     uv run python scripts/modal_runs.py fetch <run-name>       # 6. retrieve + verify
     uv run python scripts/modal_runs.py resume <run-name>      # 7. only if needed
 
-`modal run naigos/rl/modal_train.py --profile smoke` still works and still
+`modal run -m naigos.rl.modal_train --profile smoke` still works and still
 blocks; it is kept because it is the shortest way to see a traceback while
 debugging the image. It is NOT the detached path: closing the laptop kills it.
 Detachment comes from a *deployed* function plus `.spawn()`, which puts the call
@@ -94,6 +94,10 @@ if modal is not None:
             "optax>=0.2.3",
             "distrax>=0.1.5",
             "numpy>=1.26",
+            # `env_from_theatre` -> `data.geodetic` imports pyproj on every real-theatre
+            # run; `rl.checkpoint` imports orbax directly (flax only pulls it in transitively).
+            "pyproj>=3.6",
+            "orbax-checkpoint>=0.5",
             extra_index_url="https://storage.googleapis.com/jax-releases/jax_cuda_releases.html",
         )
         # the cited cache and the component specs travel with the image so the
@@ -141,6 +145,12 @@ if modal is not None:
     def _utc() -> str:
         return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
+    def _call_id() -> str | None:
+        """The function-call id (`fc-...`) `modal_runs.py status` can query; MODAL_TASK_ID cannot."""
+        with contextlib.suppress(Exception):
+            return modal.current_function_call_id()
+        return None
+
     def _train_impl(spec: dict, meta: dict) -> dict:
         """Run one training job into `/runs/<run_name>` on the Volume.
 
@@ -176,11 +186,12 @@ if modal is not None:
             status=rm.RUNNING,
             started_utc=_utc(),
             termination_reason=None,
-            job_id=spec.get("job_id") or os.environ.get("MODAL_TASK_ID"),
+            job_id=spec.get("job_id") or _call_id(),
             attempt={
                 "kind": "resume" if spec.get("resume_from") else "start",
                 "started_utc": _utc(),
                 "task_id": os.environ.get("MODAL_TASK_ID"),
+                "call_id": _call_id(),
                 "resume_from": spec.get("resume_from"),
                 "resume_overrides": spec.get("resume_overrides") or [],
             },
@@ -340,6 +351,7 @@ if modal is not None:
             print(f"[resume] selected {resume_path.name} from {out}")
 
         def progress(info: dict) -> None:
+            rm.refresh_writer_lock(out)  # else the lock reads as abandoned after LOCK_STALE_S
             rm.update_manifest(
                 out,
                 last_iteration=info.get("last_iteration"),
@@ -380,14 +392,14 @@ if modal is not None:
             else {"ok": False, "detail": "no checkpoint on the Volume carries recovery state"}
         )
         summary = rm.summarize_run(out)
-        problems = rm.verify_run_dir(out)
+        problems = rm.verify_run_dir(out, assume_finalizing=True)
         preflight["artifact_fetch"] = (
             {"ok": True, "detail": f"{len(list(out.iterdir()))} files, verify_run_dir clean"}
             if not [p for p in problems if not p.startswith("preflight check")]
             else {"ok": False, "detail": "; ".join(problems)}
         )
         rm.update_manifest(out, preflight=preflight)
-        problems = rm.verify_run_dir(out)
+        problems = rm.verify_run_dir(out, assume_finalizing=True)
         summary["problems"] = problems
         summary["preflight"] = preflight
         if profile.name == "smoke" and not problems:

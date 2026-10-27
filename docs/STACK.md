@@ -44,6 +44,7 @@ naigos/rl/train.py -> modal_train.py           naigos/demo/replay.py -> demo.jso
 | invariant | everywhere | core | `pytest tests/test_invariant.py` |
 | benchmarks | `naigos/bench/` | `rl` + `data` | `pytest tests/test_bench_terrain.py` |
 | cloud learning pipeline | `naigos/pipeline/`, `naigos/rl/modal_pipeline.py`, `scripts/pipeline.py` | core (stdlib); Modal to deploy | `pytest tests/test_pipeline_*.py tests/test_research_roots.py` |
+| trajectory datasets | `naigos/trajectory/` | core (NumPy; no JAX) | `pytest tests/test_trajectory_data.py` |
 
 `.github/workflows/ci.yml` runs the whole table above on every push and PR --
 Python 3.12, `uv sync --all-extras --frozen`, `pytest -q` -- so "verify with"
@@ -59,6 +60,23 @@ both pure and both `jit`/`vmap`-able. Fixed padded shapes; no data-dependent con
 Splitting the two is what lets the curriculum re-weight without touching physics
 and lets the verifier recheck the constraint channel independently.
 
+**Policy ladder.** `naigos/rl/policies.py` is the deployable-actor seam. Its
+frozen `PolicySpec` records family/version, exact parameter count, recurrent
+memory needs, and the local observation / three-flight-control action contract.
+The default `deepsets@1` factory returns `networks.Actor(cfg)` itself, so current
+parameter trees, the checkpoint's top-level `actor` key, and direct imports of
+`networks.Actor` are unchanged. `networks.Critic` is deliberately absent from
+the factory: it consumes centralized inputs during training and is not a
+deployment dependency. Recurrent, numeric-transformer and scripted family names
+are reserved but unregistered; asking for one fails rather than falling back.
+
+PPO still constructs `networks.Actor` and `networks.Critic` directly. Before a
+second learned family is implemented, thread family/version through run metadata
+and checkpoints (treating absent fields as `deepsets@1`), then teach PPO rollout
+and loss collection to carry the selected actor's explicit memory state. That is
+the integration point; it is intentionally not hidden inside the current
+checkpoint schema or training loop.
+
 **Verifier.** Pure NumPy, shares no code with the env. It verifies a logged trace;
 it does not re-simulate. A verifier that reuses the env's functions cannot catch a
 bug in those functions.
@@ -66,6 +84,14 @@ bug in those functions.
 **Data.** `naigos/env` never reads `data_cache/`. It reads `components/*.json`
 through `naigos/data/theatre.py`, and every component names its cached bytes by
 sha256. `tests/test_data_chain.py` enforces both directions.
+
+**Trajectory datasets.** `naigos/trajectory/` is an isolated NumPy/NPZ boundary
+for future behavior cloning, failure analysis and offline evaluation. It is not
+wired into PPO. Immutable canonical metadata declares every dtype, shape, unit
+and normalization; bounded chunks carry arrays plus per-chunk hashes; a final
+manifest is written last and is the only completion marker. The fixed action
+components remain bank, flight-path angle and throttle. The complete contract
+and extension rules are in `docs/TRAJECTORY_DATA.md`.
 
 **Theatres.** An AOI is built-in (`naigos/research/aoi.py`) or file-defined
 (`naigos/research/aois/<aoi>.json`, discovered at import). A file-defined AOI
@@ -383,7 +409,7 @@ decision path is tested offline, nothing more. The coordinator ticks and admin c
 are seconds of CPU.
 
 To change the cadence, edit `schedule` in `naigos/pipeline/default_config.json`,
-commit, and `modal deploy naigos/rl/modal_pipeline.py` again. Modal fixes a
+commit, and `modal deploy -m naigos.rl.modal_pipeline` again. Modal fixes a
 `modal.Cron` at deploy time, which is why the Volume config refuses a
 `schedule` key. Everything else -- pause, gates, seeds, profiles, budget,
 `auto_promote` -- is changed with `scripts/pipeline.py config set --file ...`
@@ -431,9 +457,9 @@ pointer byte-for-byte unchanged.
 
 ```bash
 uv pip install modal && modal token new     # auth: ~/.modal.toml, or MODAL_TOKEN_ID/SECRET in CI
-modal deploy naigos/rl/modal_train.py       # the existing detached-run app, for the smoke gate
+modal deploy -m naigos.rl.modal_train       # the existing detached-run app, for the smoke gate
 uv run python scripts/modal_runs.py submit --profile smoke   # arms the gate for this commit
-modal deploy naigos/rl/modal_pipeline.py    # from a clean tree; laptop can close after this
+modal deploy -m naigos.rl.modal_pipeline    # from a clean tree; laptop can close after this
 uv run python scripts/pipeline.py seed      # once: first snapshot from this clone's cited cache
 uv run python scripts/pipeline.py status    # scheduled/queued/running/completed/failed/
                                             # skipped/rejected/inconclusive/promoted

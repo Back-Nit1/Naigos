@@ -5,7 +5,7 @@ The whole operator flow, in order. Nothing here needs the laptop to stay awake
 past step 3.
 
     modal token new                                     # 1. authenticate
-    modal deploy naigos/rl/modal_train.py               # 2. publish the app
+    modal deploy -m naigos.rl.modal_train               # 2. publish the app
     uv run python scripts/modal_runs.py submit --profile smoke   # 3. detached
     uv run python scripts/modal_runs.py status <run-name>        # 4. verify smoke
     uv run python scripts/modal_runs.py submit --profile short   # 5. detached
@@ -54,7 +54,6 @@ from naigos.rl.modal_train import (  # noqa: E402
     GPU_KIND,
     LOG_FILENAME,
     MAX_RETRIES,
-    RUNS_ROOT,
     SMOKE_TIMEOUT_S,
     TIMEOUT_S,
     VOLUME_NAME,
@@ -115,7 +114,7 @@ def _deployed_function(tag: str):
         f"could not find the deployed function {APP_NAME}/{tag}: {runmeta.redact(str(last))}\n"
         f"Deploy it first -- a detached run must belong to a deployed app, or Modal tears "
         f"it down when the client exits:\n"
-        f"  modal deploy naigos/rl/modal_train.py"
+        f"  modal deploy -m naigos.rl.modal_train"
     )
 
 
@@ -213,7 +212,16 @@ def _read_job_record(run_name: str) -> dict | None:
 
 
 def _resolve_job_id(run_name: str, manifest: dict | None) -> str | None:
-    return (manifest or {}).get("job_id") or (_read_job_record(run_name) or {}).get("job_id")
+    """A Modal *function-call* id (`fc-...`), the only id `FunctionCall.from_id` can answer for.
+
+    The manifest may hold a task id (`ta-...`) from a worker that recorded
+    `MODAL_TASK_ID`; asking Modal about that returns nothing, which would leave a
+    timed-out job reading as running. The local submission record has the call id.
+    """
+    for jid in ((manifest or {}).get("job_id"), (_read_job_record(run_name) or {}).get("job_id")):
+        if isinstance(jid, str) and jid.startswith("fc-"):
+            return jid
+    return None
 
 
 # --- submit ------------------------------------------------------------------
@@ -319,8 +327,12 @@ def _spawn(prof, name: str, meta: dict, spec: dict, *, gpu: str) -> str:
 
     call = fn.spawn(spec, meta)
     job_id = getattr(call, "object_id", None) or str(call)
-    manifest["job_id"] = job_id
-    _put_volume_json(f"{name}/{runmeta.MANIFEST_FILENAME}", manifest)
+    # Do not upload `manifest` again here. The worker may start before spawn()
+    # returns and replace the queued record with its running record. Re-uploading
+    # this stale object would erase that transition, its attempt metadata and its
+    # start timestamp. The local job record makes the call id available to this
+    # client immediately; the worker records the same fc-id in the shared
+    # manifest through modal.current_function_call_id().
     _write_job_record(name, {
         "run_name": name,
         "job_id": job_id,
@@ -599,7 +611,9 @@ def cmd_fetch(a) -> int:
     name = runmeta.validate_run_name(a.run_name)
     dest = Path(a.dest)
     dest.mkdir(parents=True, exist_ok=True)
-    rc = _modal_cli("volume", "get", VOLUME_NAME, f"{RUNS_ROOT}/{name}", str(dest), "--force")
+    # `volume get` paths are relative to the Volume root; RUNS_ROOT is only where
+    # a container mounts it, so `/runs/<name>` would name a directory that is not there.
+    rc = _modal_cli("volume", "get", VOLUME_NAME, f"/{name}", str(dest), "--force")
     if rc != 0:
         return rc
     return _report(dest / name)

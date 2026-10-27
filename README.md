@@ -753,7 +753,7 @@ modal token new          # writes ~/.modal.toml, which is gitignored
 
 # 2. publish the app. A detached run must belong to a deployed app -- Modal
 #    tears down an ephemeral one the moment the client exits.
-modal deploy naigos/rl/modal_train.py
+modal deploy -m naigos.rl.modal_train
 
 # 3. submit the smoke run. Returns immediately with a job id.
 uv run python scripts/modal_runs.py submit --profile smoke
@@ -790,7 +790,7 @@ image uploads only `naigos/`, `components/` and `data_cache/` — no dotfiles, n
 `submit` calls `.spawn()` on the deployed function. The call goes into Modal's
 queue and is executed by Modal's infrastructure; the returned call id is the
 stable job identifier and nothing about the job depends on the local process
-afterwards. `modal run naigos/rl/modal_train.py --profile smoke` still works and
+afterwards. `modal run -m naigos.rl.modal_train --profile smoke` still works and
 is still the shortest way to watch a traceback arrive while debugging the image,
 but it holds the job open only for as long as the local entrypoint lives.
 
@@ -914,7 +914,7 @@ promotion decision. **Deploying is the only step that needs this machine**;
 the crons then run on Modal's infrastructure with every client closed.
 
 ```bash
-modal deploy naigos/rl/modal_pipeline.py       # once, from a clean tree
+modal deploy -m naigos.rl.modal_pipeline       # once, from a clean tree
 uv run python scripts/pipeline.py seed         # once: first snapshot from the cited cache
 uv run python scripts/pipeline.py status       # later, from any clone with Modal credentials
 uv run python scripts/pipeline.py promote <candidate-id> --approver <name>

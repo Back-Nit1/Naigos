@@ -1,7 +1,7 @@
 """Modal deployment of the cloud learning pipeline: crons, workers, admin actions.
 
     modal token new                                   # once, on any machine
-    modal deploy naigos/rl/modal_pipeline.py          # the only step that needs the laptop
+    modal deploy -m naigos.rl.modal_pipeline          # the only step that needs the laptop
     uv run python scripts/pipeline.py status          # from anywhere, any time after
 
 After ``modal deploy`` the schedules belong to Modal. The three ``modal.Cron``
@@ -121,11 +121,15 @@ if modal is not None:
         "xarray>=2023.1", "pyproj>=3.6"))
     # The training stack of modal_train.py, minus the baked data_cache/components:
     # a candidate trains on its snapshot, never on whatever the image carried.
+    # pyproj: `env_from_theatre` needs it on every real-theatre run; orbax: `rl.checkpoint`
+    # imports it directly (flax only pulls it in transitively).
     train_image = _finish(_base.pip_install(
         "jax[cuda12]>=0.4.34", "flax>=0.10", "optax>=0.2.3", "distrax>=0.1.5", "numpy>=1.26",
+        "pyproj>=3.6", "orbax-checkpoint>=0.5",
         extra_index_url="https://storage.googleapis.com/jax-releases/jax_cuda_releases.html"))
     eval_image = _finish(_base.pip_install(
         "jax>=0.4.34", "flax>=0.10", "optax>=0.2.3", "distrax>=0.1.5", "numpy>=1.26",
+        "pyproj>=3.6", "orbax-checkpoint>=0.5",
     ).env({"JAX_PLATFORMS": "cpu"}))
 
     app = modal.App(APP_NAME)
@@ -299,6 +303,7 @@ if modal is not None:
                 raise RuntimeError("resume requested but no checkpoint carries recovery state")
 
             def progress(info: dict) -> None:
+                rm.refresh_writer_lock(out_dir)
                 rm.update_manifest(out_dir, last_iteration=info.get("last_iteration"),
                                    iterations_declared=info.get("iterations_declared"))
 
