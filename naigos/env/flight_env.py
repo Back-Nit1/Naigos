@@ -641,6 +641,45 @@ class NaigosEnv:
         )
 
     # ------------------------------------------------------------- rollouts --
+    def _trace_frame(self, state2, obs2, action, feasible, terms, done, info):
+        """One rollout trace row. Shared by the stateless and recurrent scans so
+        both carry every L1 resource field."""
+        return {
+            "pos": state2.air.pos,
+            "psi": state2.air.psi,
+            # attitude state the airframe integrated, logged as-is so a
+            # replay can draw bank and climb instead of inferring them
+            "gamma": state2.air.gamma,
+            "phi": state2.air.phi,
+            "speed": state2.air.speed,
+            "fuel": state2.air.fuel,
+            "alt_agl": info["alt_agl"],
+            "alive": state2.alive,
+            "reached": state2.reached,
+            "diverted": state2.resource.diverted,
+            "outcome": state2.resource.outcome,
+            "reserve_fuel": state2.resource.reserve_fuel,
+            "initial_fuel": state2.resource.initial_fuel,
+            "burn_multiplier": state2.resource.burn_multiplier,
+            "diversion_pos": state2.resource.diversion_pos,
+            "diversion_active": state2.resource.diversion_active,
+            "objective": state2.objective,
+            "bounds": state2.bounds,
+            "resource_observation": obs2.ego[:, -self.cfg.resource.observation_dim:]
+            if self.cfg.resource.enabled
+            else jnp.zeros((self.cfg.n_blue, 0), dtype=obs2.ego.dtype),
+            "action": action,
+            "cbf_feasible": feasible,
+            "terms": terms,
+            "done": done,
+            "threat_pos": state2.threats.pos,
+            "threat_psi": state2.threats.psi,
+            "lock": state2.lock,
+            # (T, B) engagement firing solutions this step -- which threat a
+            # logged shootdown can be attributed to
+            "firing": info["firing"],
+        }
+
     def rollout(self, key, policy, n_steps: int | None = None, action_filter=None, route=None):
         """Scan a whole episode. `policy(obs, key) -> (n_blue, 3)`.
 
@@ -676,17 +715,7 @@ class NaigosEnv:
                     (info["agent_done"] | done)[..., None],
                     jnp.zeros_like(memory), memory,
                 )
-                out = {
-                    "pos": state2.air.pos, "psi": state2.air.psi,
-                    "gamma": state2.air.gamma, "phi": state2.air.phi,
-                    "speed": state2.air.speed, "alt_agl": info["alt_agl"],
-                    "alive": state2.alive, "reached": state2.reached,
-                    "action": action, "cbf_feasible": feasible,
-                    "terms": terms, "done": done,
-                    "threat_pos": state2.threats.pos,
-                    "threat_psi": state2.threats.psi,
-                    "lock": state2.lock, "firing": info["firing"],
-                }
+                out = self._trace_frame(state2, obs2, action, feasible, terms, done, info)
                 return (state2, obs2, memory, k), out
 
             k0, k1 = jax.random.split(key)
@@ -706,41 +735,7 @@ class NaigosEnv:
             else:
                 action, feasible = action_filter(state, obs, action)
             state2, obs2, terms, done, info = self.step(state, action)
-            out = {
-                "pos": state2.air.pos,
-                "psi": state2.air.psi,
-                # attitude state the airframe integrated, logged as-is so a
-                # replay can draw bank and climb instead of inferring them
-                "gamma": state2.air.gamma,
-                "phi": state2.air.phi,
-                "speed": state2.air.speed,
-                "fuel": state2.air.fuel,
-                "alt_agl": info["alt_agl"],
-                "alive": state2.alive,
-                "reached": state2.reached,
-                "diverted": state2.resource.diverted,
-                "outcome": state2.resource.outcome,
-                "reserve_fuel": state2.resource.reserve_fuel,
-                "initial_fuel": state2.resource.initial_fuel,
-                "burn_multiplier": state2.resource.burn_multiplier,
-                "diversion_pos": state2.resource.diversion_pos,
-                "diversion_active": state2.resource.diversion_active,
-                "objective": state2.objective,
-                "bounds": state2.bounds,
-                "resource_observation": obs2.ego[:, -self.cfg.resource.observation_dim:]
-                if self.cfg.resource.enabled
-                else jnp.zeros((self.cfg.n_blue, 0), dtype=obs2.ego.dtype),
-                "action": action,
-                "cbf_feasible": feasible,
-                "terms": terms,
-                "done": done,
-                "threat_pos": state2.threats.pos,
-                "threat_psi": state2.threats.psi,
-                "lock": state2.lock,
-                # (T, B) engagement firing solutions this step -- which threat a
-                # logged shootdown can be attributed to
-                "firing": info["firing"],
-            }
+            out = self._trace_frame(state2, obs2, action, feasible, terms, done, info)
             return (state2, obs2, k), out
 
         k0, k1 = jax.random.split(key)

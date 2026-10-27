@@ -452,14 +452,17 @@ def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights
                 )
                 gs = critic_inputs(ob)
                 v, vc = critic_per_agent(learner.critic.params, gs)
-                live = st.alive & ~st.reached
+                # Same live/terminal convention as the feedforward collector:
+                # arrival, diversion, loss and timeout each end an aircraft once.
+                live = active_agent_mask(st)
                 st2, ob2, terms, done, info = env.step(st, act)
-                r = compute_reward(terms, weights)
-                c = constraint_cost(terms)
+                r = compute_reward(terms, weights, alive_mask=live)
+                c = constraint_cost(terms) * live.astype(jnp.float32)
                 agent_done_bool = info["agent_done"] | done
                 agent_done = agent_done_bool.astype(jnp.float32)
-                # A completed agent remains zero while its world finishes; a
-                # completed world is zero before the reset observation is used.
+                completed = completed_agent_mask(live, agent_done_bool).astype(jnp.float32)
+                # Memory is zero for any aircraft that reached, died, diverted
+                # or whose world resets, and stays zero while frozen.
                 mem2 = policies.reset_memory(mem2, agent_done_bool | ~live)
                 st_r, ob_r = env.reset(kr, st.red_scales)
                 st2, ob2 = jax.tree.map(
@@ -471,7 +474,7 @@ def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights
                     threat_mask=ob.threat_mask, friends=ob.friends,
                     friend_mask=ob.friend_mask, memory=mem,
                     gs=gs, raw=raw, logp=lp, v=v, vc=vc, r=r, c=c,
-                    d=agent_done, live=live, shot=terms.shotdown,
+                    d=agent_done, live=live, completed=completed, shot=terms.shotdown,
                     arrived=terms.arrived, exposure=terms.exposure,
                     progress=terms.progress, reset=done.astype(jnp.float32),
                 )
@@ -562,7 +565,7 @@ def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights
 
         live = traj["live"]
         cost_accum = learner.cost_accum + jnp.sum(traj["c"] * live)
-        episode_accum = learner.episode_accum + jnp.sum(traj["d"] * live)
+        episode_accum = learner.episode_accum + jnp.sum(traj["completed"])
         j_cost = jnp.where(
             episode_accum > 0,
             cost_accum / jnp.maximum(episode_accum, 1.0), 0.0,
