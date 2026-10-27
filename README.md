@@ -699,6 +699,9 @@ uv run python scripts/train_theatre.py --iterations 1000 --cbf
 
 # frozen notional city stress case; no live weather request
 uv run python scripts/train_theatre.py --aoi nyc_harbor --city-scenario harbor_crosswind --iterations 1
+
+# offline urban hot-loop benchmark against an already validated artifact
+uv run python scripts/bench_urban_physics.py <urban-artifact-directory>
 ```
 
 Checkpoints and `history.json` land in `runs/<name>/`. The committed result came

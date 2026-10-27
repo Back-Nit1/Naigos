@@ -1,0 +1,35 @@
+{
+  "schema": "naigos.bench.urban_physics_comparison/1",
+  "command": "python scripts/bench_urban_physics.py tests/fixtures/urban_physics_root/urban_physics/nyc_harbor/c68d8582bf27f84f --worlds 32 --steps 128 --repeats 9",
+  "measurement_scope": "local CPU implementation benchmark; not a learned-performance result",
+  "vehicle_weather_control": {
+    "platform": "macOS-26.4-arm64-arm-64bit",
+    "jax_backend": "cpu",
+    "n_worlds": 32,
+    "n_steps": 128,
+    "n_blue": 2,
+    "compile_s": 0.5741537089925259,
+    "best_s": 0.009823708969634026,
+    "median_s": 0.009993916959501803,
+    "world_steps_per_s": 416950.4626675227
+  },
+  "urban_physics": {
+    "platform": "macOS-26.4-arm64-arm-64bit",
+    "jax_backend": "cpu",
+    "n_worlds": 32,
+    "n_steps": 128,
+    "n_blue": 2,
+    "compile_s": 0.70590641599847,
+    "best_s": 0.014163583982735872,
+    "median_s": 0.01455100002931431,
+    "world_steps_per_s": 289192.34037039307
+  },
+  "steady_state_overhead_ratio": 1.4417756090410245,
+  "artifact": {
+    "schema": "naigos.urban_obstacles/1",
+    "aoi": "nyc_harbor",
+    "sha256": "c68d8582bf27f84f7d9353285285d300a58309566e395ebc9e7f07bd52fe446b",
+    "shape": [493, 500],
+    "cell_m": 10.0
+  }
+}

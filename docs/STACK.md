@@ -42,7 +42,7 @@ naigos/rl/train.py -> modal_train.py           naigos/demo/replay.py -> demo.jso
 | learning | `naigos/rl/` | `rl` | `pytest tests/test_networks_ctde.py tests/test_reward_shaping.py tests/test_cbf.py` |
 | presentation | `naigos/demo/` | `demo` | `pytest tests/test_viewer_export.py tests/test_terrain_endpoint.py tests/test_geodetic_live.py tests/test_imagery_layers.py tests/test_visual_modes.py tests/test_visual_renderer.py tests/test_replay_clock.py tests/test_los_profile.py tests/test_cesium_version.py tests/test_demo_isolation.py tests/test_model_assets.py tests/test_attitude.py tests/test_visual_events.py tests/test_camera_presets.py tests/test_visual_fidelity.py` |
 | invariant | everywhere | core | `pytest tests/test_invariant.py` |
-| benchmarks | `naigos/bench/` | `rl` + `data` | `pytest tests/test_bench_terrain.py` |
+| benchmarks | `naigos/bench/` | `rl` + `data` | `pytest tests/test_bench_terrain.py tests/test_physics_performance.py` |
 | cloud learning pipeline | `naigos/pipeline/`, `naigos/rl/modal_pipeline.py`, `scripts/pipeline.py` | core (stdlib); Modal to deploy | `pytest tests/test_pipeline_*.py tests/test_research_roots.py` |
 | trajectory datasets | `naigos/trajectory/` | core (NumPy; no JAX) | `pytest tests/test_trajectory_data.py` |
 | trajectory recording | `naigos/rl/trajectory_recording.py` | `rl` | `pytest tests/test_trajectory_recording.py` |

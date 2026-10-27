@@ -193,8 +193,13 @@ fixture is explicitly labelled non-6-DoF.
 
 **Measured locally:** focused weather, mission, urban, CBF, checkpoint,
 trajectory, GRU/resource and validator tests pass on CPU; a one-iteration PPO
-physics smoke completed locally. These are implementation checks, not learned
-performance results. No remote training or Modal job was submitted.
+physics smoke completed locally. A 32-world × 128-step CPU benchmark against the
+committed 500×493 NYC 10 m artifact measured 289,192 urban world-steps/s versus
+416,950 for the vehicle-weather control (1.442× wall-time overhead); compilation
+was 0.706 s versus 0.574 s. These best-of-nine local measurements are recorded
+in `docs/artifacts/urban_physics_bench.json`; they are implementation throughput,
+not learned performance and not a cross-machine promise. No remote training or
+Modal job was submitted.
 
 Known limitations are the assumed airframe/fuel coefficients, AR rather than
 Dryden turbulence, a mechanical-wake surrogate rather than CFD, raster swept
