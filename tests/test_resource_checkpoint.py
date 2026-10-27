@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 import jax
 import numpy as np
 import pytest
@@ -46,6 +48,34 @@ def test_missing_environment_fields_mean_baseline_only():
     ck.require_environment_compatible(legacy, EnvConfig(), "legacy")
     with pytest.raises(ck.CheckpointError, match="cross-schema"):
         ck.require_environment_compatible(legacy, CFG, "legacy")
+
+
+def test_schema4_baseline_normalizes_the_unreachable_diversion_weight():
+    saved_weights = dataclasses.asdict(RewardWeights())
+    saved_weights.pop("diverted")
+    legacy = {
+        "schema": 4,
+        "recovery": {
+            "red_curriculum": dataclasses.asdict(RedCurriculum()),
+            "reward_curriculum": dataclasses.asdict(RewardCurriculum()),
+            "reward_weights_base": saved_weights,
+        },
+    }
+    assert ck.curriculum_compatibility(
+        legacy,
+        red_curriculum=RedCurriculum(),
+        reward_curriculum=RewardCurriculum(),
+        reward_weights_base=RewardWeights(),
+    ) == []
+
+    resource = {**legacy, "environment_model_id": RESOURCE_WORLD_L1}
+    problems = ck.curriculum_compatibility(
+        resource,
+        red_curriculum=RedCurriculum(),
+        reward_curriculum=RewardCurriculum(),
+        reward_weights_base=RewardWeights(),
+    )
+    assert any("diverted" in problem for problem in problems)
 
 
 def test_resource_checkpoint_requires_explicit_matching_resource_config():

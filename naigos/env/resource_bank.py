@@ -144,7 +144,7 @@ def assert_resource_bank_disjoint(training_seeds) -> None:
 def resource_protocol() -> dict:
     return {
         "environment_model_id": RESOURCE_WORLD_L1,
-        "observation_schema_id": "ResourceObservation-v1",
+        "observation_schema_id": "L1EnduranceObservation-v1",
         "bank": RESOURCE_BANK_VERSION,
         "bank_sha256": RESOURCE_BANK_V1_SHA256,
         "seed_ranges": {

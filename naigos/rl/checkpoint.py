@@ -30,7 +30,7 @@ silently reset:
     list, so a resume that started with an empty list would truncate the curve
     to the resumed segment.
 
-So the schema-4 checkpoint carries all of it. The top-level `actor`, `critic`,
+So the checkpoint carries all of it. The top-level `actor`, `critic`,
 `lam_raw`, `red_level`, `iter` and `env_cfg` keys are kept exactly where they
 were, because `naigos/demo/replay.py` and `naigos/demo/live.py` read them
 through `load()`, and a checkpoint format change must not break the demo.
@@ -55,6 +55,10 @@ hand-rolled array format to get subtly wrong. A checkpoint is now a directory
 atomicity reasoning as before) rather than a single pickle file.
 `scripts/convert_checkpoint.py` migrates a pre-schema-4 pickle one-way; nothing
 in this module reads pickle, by design.
+
+Schema 5 adds explicit environment, observation, and actor identifiers plus the
+L1 resource configuration. Schema-4 recovery checkpoints remain resumable only
+as baseline-v0; missing fields never imply a resource-world upgrade.
 """
 
 from __future__ import annotations
@@ -82,15 +86,16 @@ from ..env.config import (
 #: `recovery`. 3 added the lifetime CMDP accumulators (`cost_accum`,
 #: `episode_accum`) that make the measured cost rate invariant to PPO
 #: n_steps -- see `naigos/rl/ppo.py`. 4 replaced the pickle file with an Orbax
-#: checkpoint directory (next-steps.md G-3); nothing else about the schema
-#: changed. `load` only understands schema 4; a pre-4 checkpoint must go
-#: through `scripts/convert_checkpoint.py` first.
-CHECKPOINT_SCHEMA = 4
+#: checkpoint directory (next-steps.md G-3). 5 adds explicit resource-world
+#: identity and configuration. A pre-4 checkpoint must go through the one-way
+#: converter; schema 4 remains a supported baseline recovery format.
+CHECKPOINT_SCHEMA = 5
+SUPPORTED_CHECKPOINT_SCHEMAS = (4, CHECKPOINT_SCHEMA)
 
 BASELINE_OBSERVATION_SCHEMA = "Observation-v0"
-RESOURCE_OBSERVATION_SCHEMA = "ResourceObservation-v1"
+RESOURCE_OBSERVATION_SCHEMA = "L1EnduranceObservation-v1"
 BASELINE_ACTOR_SCHEMA = "ActorV1"
-RESOURCE_ACTOR_SCHEMA = "ActorV2"
+RESOURCE_ACTOR_SCHEMA = "ActorV1+L1EnduranceInputs"
 
 REQUIRED_RECOVERY_KEYS = (
     "iteration",
@@ -343,7 +348,7 @@ def is_resumable(path: str | os.PathLike) -> bool:
     rec = blob.get("recovery")
     if not isinstance(rec, dict):
         return False
-    if blob.get("schema") != CHECKPOINT_SCHEMA:
+    if blob.get("schema") not in SUPPORTED_CHECKPOINT_SCHEMAS:
         return False
     if any(k not in rec for k in REQUIRED_RECOVERY_KEYS):
         return False
@@ -381,6 +386,15 @@ def curriculum_compatibility(
         if saved is None:
             problems.append(f"{label}: not recorded in this checkpoint")
             continue
+        # `diverted` is unreachable in baseline-v0. A schema-4 baseline
+        # checkpoint written before that reward field existed is therefore
+        # semantically unchanged; normalize only this neutral addition.
+        if (
+            label == "reward weights"
+            and environment_model_from_blob(blob) == RESOURCE_WORLD_BASELINE
+            and "diverted" not in saved
+        ):
+            saved = {**saved, "diverted": current["diverted"]}
         changed = sorted(
             k for k in set(saved) | set(current) if saved.get(k) != current.get(k)
         )
