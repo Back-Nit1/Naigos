@@ -546,7 +546,8 @@ def test_the_preflight_covers_everything_the_smoke_run_is_for():
     """image build, GPU backend, data cache, Volume writes, checkpoint
     persistence, artifact retrieval -- one named check each."""
     assert set(rm.PREFLIGHT_CHECKS) == {
-        "image", "gpu_backend", "data_cache", "volume_write", "checkpoint", "artifact_fetch"
+        "image", "source_identity", "gpu_backend", "data_cache", "volume_write",
+        "resource_reservation", "checkpoint", "artifact_fetch",
     }
 
 
