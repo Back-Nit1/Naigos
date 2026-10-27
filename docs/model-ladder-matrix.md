@@ -89,7 +89,8 @@ Before any job is spawned, the command requires all of the following:
 - the declared timeout covers the deployed function timeout;
 - every cell is supported by the current training worker;
 - every non-smoke cell has a successful, clean smoke marker for that exact
-  commit; and
+  commit, produced by an image whose independently baked deploy-time source
+  fingerprint matches that commit; and
 - no run name already has a live writer.
 
 It then calls `scripts.modal_runs.submit_prepared`, which uses the existing
@@ -98,6 +99,11 @@ lock, checkpoint, status, and resume machinery. The matrix command never
 deploys or authenticates. Resume remains an explicit inspection-time decision
 through `scripts/modal_runs.py resume`; the matrix does not auto-resume or put
 two writers in one run directory.
+
+The image fingerprint means a smoke submission against an old deployment fails
+instead of blessing the current checkout under an old image. After changing
+code, deploy the clean committed checkout, then run smoke; the worker records
+both the baked source fingerprint and Modal image ID in runtime provenance.
 
 Run names and identities are deterministic. Changing any axis, resolved
 profile, code state, policy contract, theatre policy basis, dataset digest, or

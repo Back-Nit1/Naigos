@@ -242,7 +242,11 @@ def test_prepared_submit_uses_verified_smoke_and_writer_gates(monkeypatch):
         )
 
     monkeypatch.setattr(
-        mr, "_read_volume_json", lambda _path: {"commit": CODE["commit"], "dirty": False}
+        mr, "_read_volume_json", lambda _path: {
+            "commit": CODE["commit"],
+            "dirty": False,
+            "runtime": {"image_source": CODE},
+        }
     )
     assert mr.submit_prepared(
         profile, "matrix-test", meta, spec, require_verified_smoke=True
@@ -258,6 +262,15 @@ def test_verified_smoke_gate_requires_exact_clean_provenance():
     assert "clean worktree" in runmeta.verified_smoke_gate(
         "short", {"commit": CODE["commit"], "dirty": True}, CODE["commit"]
     )
-    assert runmeta.verified_smoke_gate(
+    assert "deployed image source" in runmeta.verified_smoke_gate(
         "short", {"commit": CODE["commit"], "dirty": False}, CODE["commit"]
+    )
+    assert runmeta.verified_smoke_gate(
+        "short",
+        {
+            "commit": CODE["commit"],
+            "dirty": False,
+            "runtime": {"image_source": CODE},
+        },
+        CODE["commit"],
     ) is None

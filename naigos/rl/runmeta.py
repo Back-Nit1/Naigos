@@ -408,6 +408,9 @@ def verified_smoke_gate(profile: str, marker: dict | None, commit: str | None) -
         return "the smoke marker does not verify the current commit"
     if marker.get("dirty") is not False:
         return "the smoke marker was not produced from a clean worktree"
+    image_source = (marker.get("runtime") or {}).get("image_source") or {}
+    if image_source != {"commit": commit, "dirty": False}:
+        return "the smoke marker does not verify the deployed image source"
     return None
 
 
@@ -851,6 +854,7 @@ def classify_status(
 #: these six things is broken, in minutes rather than six hours in.
 PREFLIGHT_CHECKS = (
     "image",          # the remote image built and imports the training stack
+    "source_identity",# deployed source matches the commit claimed by the launcher
     "gpu_backend",    # JAX resolved a CUDA backend, not a silent CPU fallback
     "data_cache",     # the cited cache travelled with the image and is readable
     "volume_write",   # the Volume is mounted, writable and survives a commit

@@ -12,6 +12,9 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
+from naigos.rl import modal_train
 from naigos.rl import runmeta as rm
 
 REPO = Path(__file__).resolve().parents[1]
@@ -65,6 +68,23 @@ def test_training_and_evaluation_images_carry_the_theatre_and_checkpoint_depende
         pkgs = _pip_packages(path, var)
         for needed in ("pyproj", "orbax-checkpoint"):
             assert needed in pkgs, f"{path.name}:{var} does not install {needed}"
+
+
+def test_deployed_image_source_is_independent_and_must_match_requested_code():
+    env = {
+        "NAIGOS_IMAGE_SOURCE_COMMIT": "abc123",
+        "NAIGOS_IMAGE_SOURCE_DIRTY": "false",
+    }
+    assert modal_train.verify_image_source(
+        {"commit": "abc123", "dirty": False}, env
+    ) == {"commit": "abc123", "dirty": False}
+    with pytest.raises(RuntimeError, match="does not match requested code"):
+        modal_train.verify_image_source({"commit": "other", "dirty": False}, env)
+    with pytest.raises(RuntimeError, match="no verifiable source fingerprint"):
+        modal_train.verify_image_source(
+            {"commit": "abc123", "dirty": False},
+            {"NAIGOS_IMAGE_SOURCE_COMMIT": "", "NAIGOS_IMAGE_SOURCE_DIRTY": "null"},
+        )
 
 
 # --- fetch: `modal volume get` paths are relative to the Volume root, not the mount -----------

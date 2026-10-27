@@ -61,6 +61,52 @@ VOLUME_NAME = "naigos-runs"
 RUNS_ROOT = "/runs"
 LOG_FILENAME = "train.log"
 
+# The launcher tells the worker which commit it wants, but that claim is not
+# evidence about the code inside an already-deployed function. Capture the
+# deploy-time checkout independently and bake it into the image recipe. The
+# worker refuses a request unless these values match the requested metadata.
+_SOURCE_COMMIT_ENV = "NAIGOS_IMAGE_SOURCE_COMMIT"
+_SOURCE_DIRTY_ENV = "NAIGOS_IMAGE_SOURCE_DIRTY"
+_SOURCE_ROOT = Path(__file__).resolve().parents[2]
+DEPLOYED_SOURCE = runmeta.git_info(_SOURCE_ROOT)
+
+
+def _source_image_env(source: dict) -> dict[str, str]:
+    return {
+        _SOURCE_COMMIT_ENV: str(source.get("commit") or ""),
+        _SOURCE_DIRTY_ENV: json.dumps(source.get("dirty")),
+    }
+
+
+def image_source_fingerprint(environ=None) -> dict:
+    """Read the source identity baked into the deployed image."""
+    environ = os.environ if environ is None else environ
+    commit = environ.get(_SOURCE_COMMIT_ENV) or None
+    try:
+        dirty = json.loads(environ.get(_SOURCE_DIRTY_ENV, "null"))
+    except json.JSONDecodeError:
+        dirty = None
+    if dirty not in (True, False, None):
+        dirty = None
+    return {"commit": commit, "dirty": dirty}
+
+
+def verify_image_source(requested: dict, environ=None) -> dict:
+    """Return the baked identity, or reject a stale/misattributed deployment."""
+    actual = image_source_fingerprint(environ)
+    wanted = {
+        "commit": (requested or {}).get("commit"),
+        "dirty": (requested or {}).get("dirty"),
+    }
+    if not actual["commit"] or actual["dirty"] not in (True, False):
+        raise RuntimeError(f"deployed image has no verifiable source fingerprint: {actual}")
+    if wanted != actual:
+        raise RuntimeError(
+            f"deployed image source {actual} does not match requested code {wanted}; "
+            "deploy this checkout before submitting work"
+        )
+    return actual
+
 # --- budget-oriented defaults ------------------------------------------------
 # All four are explicit because all four cost money, and because a default that
 # is not written down is a default nobody reviews.
@@ -100,6 +146,7 @@ if modal is not None:
             "orbax-checkpoint>=0.5",
             extra_index_url="https://storage.googleapis.com/jax-releases/jax_cuda_releases.html",
         )
+        .env(_source_image_env(DEPLOYED_SOURCE))
         # the cited cache and the component specs travel with the image so the
         # GPU worker never needs network access -- the same offline guarantee
         # the local path has. `data_cache/` is ~170 MB; it is an image layer, so
@@ -231,7 +278,7 @@ if modal is not None:
             volume.commit()
         return summary
 
-    def _preflight(out: Path, rm) -> dict:
+    def _preflight(out: Path, rm, meta: dict) -> dict:
         """Answer, by name, each thing a smoke run exists to prove.
 
         Run before training on every profile, and *reported* on the smoke
@@ -295,6 +342,7 @@ if modal is not None:
             return f"{out} is writable and commits"
 
         check("image", _image)
+        check("source_identity", lambda: verify_image_source(meta.get("code") or {}))
         check("gpu_backend", _gpu)
         check("data_cache", _cache)
         check("volume_write", _volume)
@@ -309,7 +357,7 @@ if modal is not None:
         from naigos.rl.train import TrainConfig, run
 
         profile = rm.RunProfile(**spec["profile"])
-        preflight = _preflight(out, rm)
+        preflight = _preflight(out, rm, meta)
         rm.update_manifest(out, preflight=preflight)
         volume.commit()
         failed = rm.preflight_problems({**preflight, "checkpoint": {"ok": True},
@@ -364,6 +412,15 @@ if modal is not None:
         # hits its timeout leaves an empty Volume: the container's filesystem is
         # discarded and only committed bytes survive.
         volume.commit()
+        image_source = verify_image_source(meta.get("code") or {})
+        meta = {
+            **meta,
+            "runtime": {
+                **(meta.get("runtime") or {}),
+                "image_source": image_source,
+                "modal_image_id": os.environ.get("MODAL_IMAGE_ID"),
+            },
+        }
         _, history = run(
             cfg,
             PPOConfig(**profile.ppo_kwargs()),
