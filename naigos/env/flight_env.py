@@ -27,6 +27,7 @@ import jax.numpy as jnp
 from . import airframe as af_mod
 from . import detection as det_mod
 from . import obs as obs_mod
+from . import resource as resource_mod
 from . import terrain as terrain_mod
 from . import threats as threats_mod
 from .airframe import AircraftState
@@ -62,6 +63,9 @@ class EnvState(NamedTuple):
     # promotion changes what a *new* episode spawns with, without retracing
     # anything that was already compiled for a different level.
     red_scales: RedScales
+    # Always present so the pytree is fixed-shape. baseline-v0 carries neutral
+    # values and never enters the resource transition branch.
+    resource: resource_mod.ResourceState
 
 
 class RewardTerms(NamedTuple):
@@ -72,6 +76,7 @@ class RewardTerms(NamedTuple):
     lock_level: jax.Array  # (B,) max track quality against this aircraft
     envelope_dwell: jax.Array  # (B,) 1 if inside any lethal envelope
     arrived: jax.Array  # (B,) 1 on the step the objective is reached
+    diverted: jax.Array  # (B,) 1 on the step an L1 recovery gate is reached
     shotdown: jax.Array  # (B,) 1 on the step the aircraft is killed
     fuel_used: jax.Array  # (B,) kg burned this step
     g_excess: jax.Array  # (B,) load factor above 1
@@ -180,14 +185,7 @@ class NaigosEnv:
         tstate = threats_mod.spawn(k_thr, cfg, hmap, corridor, red_scales)
 
         to_obj = objective - start
-        air = AircraftState(
-            pos=start,
-            speed=jnp.full((B,), cfg.airframe.v_init),
-            psi=jnp.arctan2(to_obj[:, 1], to_obj[:, 0]),
-            gamma=jnp.zeros((B,)),
-            phi=jnp.zeros((B,)),
-            fuel=jnp.full((B,), cfg.airframe.fuel_init),
-        )
+        air, resource = resource_mod.initial_state(cfg, key, hmap, start, objective, bounds)
 
         state = EnvState(
             air=air,
@@ -204,6 +202,7 @@ class NaigosEnv:
             key=k_next,
             route=route,
             red_scales=red_scales,
+            resource=resource,
         )
         return state, self.observe(state)
 
@@ -329,14 +328,14 @@ class NaigosEnv:
             state.threats.active,
         )
         # a dead or arrived aircraft stops generating returns
-        live = (state.alive & ~state.reached).astype(jnp.float32)
+        live = (state.alive & ~state.reached & ~state.resource.diverted).astype(jnp.float32)
         det["pd"] = det["pd"] * live[None, :]
         return tparams, det
 
     def observe(self, state: EnvState) -> obs_mod.Observation:
         cfg = self.cfg
         tparams, det = self._geometry(state)
-        return obs_mod.build(
+        ob = obs_mod.build(
             cfg,
             state.air.pos,
             state.air.psi,
@@ -356,6 +355,10 @@ class NaigosEnv:
             det["vis"],
             bounds=state.bounds,
         )
+        if cfg.resource.enabled:
+            extra = resource_mod.observation_features(cfg, state.air, state.objective, state.resource)
+            ob = ob._replace(ego=jnp.concatenate([ob.ego, extra], axis=-1))
+        return ob
 
     # ----------------------------------------------------------------- step --
     def step(self, state: EnvState, action: jax.Array):
@@ -364,7 +367,7 @@ class NaigosEnv:
         dt = cfg.dt
         key, k_kill, k_red = jax.random.split(state.key, 3)
 
-        frozen = (~state.alive) | state.reached  # dead/arrived aircraft stop flying
+        frozen = (~state.alive) | state.reached | state.resource.diverted
         fuel_before = state.air.fuel
 
         # sub-step the airframe: the decision rate (dt) is coarser than the rate
@@ -374,17 +377,26 @@ class NaigosEnv:
         for _ in range(cfg.substeps):
             air_next = af_mod.step(cfg.airframe, air_next, action, h)
         air = jax.tree.map(lambda new, old: jnp.where(_bcast(frozen, new), old, new), air_next, state.air)
+        if cfg.resource.enabled:
+            # The existing airframe integrates the nominal burn. L1 applies an
+            # episode multiplier to that measured delta, without changing the
+            # baseline branch or its RNG stream.
+            nominal_used = jnp.maximum(fuel_before - air.fuel, 0.0)
+            fuel = jnp.maximum(fuel_before - nominal_used * state.resource.burn_multiplier, 0.0)
+            air = air._replace(fuel=jnp.where(frozen, fuel_before, fuel))
 
         # --- red team moves, using the picture it had at the start of the step -
         psi_cmd, speed_cmd = self.red_policy(
-            k_red, cfg, state.threats, state.air.pos, af_mod.velocity(state.air), state.alive & ~state.reached,
+            k_red, cfg, state.threats, state.air.pos, af_mod.velocity(state.air),
+            state.alive & ~state.reached & ~state.resource.diverted,
             state.lock, state.red_scales,
         )
         # vertical pursuit runs off the SAME start-of-step track picture the red
         # policy just used, so the two channels cannot disagree about which blue
         # is being chased -- or about whether one has been seen at all.
         vz_cmd = threats_mod.vertical_command(
-            cfg, state.threats, state.air.pos, state.alive & ~state.reached, state.lock, state.red_scales
+            cfg, state.threats, state.air.pos,
+            state.alive & ~state.reached & ~state.resource.diverted, state.lock, state.red_scales
         )
         tstate = threats_mod.step(
             cfg, state.threats, state.hmap, psi_cmd, speed_cmd, vz_cmd, state.red_scales
@@ -395,7 +407,7 @@ class NaigosEnv:
         det = det_mod.detection_probability(
             state.hmap, cfg.terrain, cfg.detection, air.pos, air.psi, tstate.pos, tparams, tstate.active
         )
-        live = (state.alive & ~state.reached).astype(jnp.float32)
+        live = (state.alive & ~state.reached & ~state.resource.diverted).astype(jnp.float32)
         pd = det["pd"] * live[None, :]
 
         lock = det_mod.update_track(state.lock, pd, tparams, dt)
@@ -408,7 +420,8 @@ class NaigosEnv:
         hazard = hazard * live
 
         # --- outcomes ----------------------------------------------------------
-        shot = (jax.random.uniform(k_kill, (cfg.n_blue,)) < hazard) & state.alive & ~state.reached
+        shot = ((jax.random.uniform(k_kill, (cfg.n_blue,)) < hazard) & state.alive
+                & ~state.reached & ~state.resource.diverted)
 
         ground = terrain_mod.sample_height(state.hmap, cfg.terrain, air.pos[:, 0], air.pos[:, 1])
         alt_agl = air.pos[:, 2] - ground
@@ -423,7 +436,10 @@ class NaigosEnv:
             | (air.pos[:, 1] < y0)
             | (air.pos[:, 1] > y1)
         ) & ~frozen
-        dry = (air.fuel <= 0.0) & ~frozen
+        if cfg.resource.enabled:
+            dry = (fuel_before > 0.0) & (air.fuel <= 0.0) & ~frozen
+        else:
+            dry = (air.fuel <= 0.0) & ~frozen
 
         # Soft boundary ramp. The terminal bounds penalty is a cliff with no
         # gradient: by the time it fires the aircraft is already gone, so the
@@ -438,9 +454,29 @@ class NaigosEnv:
         edge = jnp.clip(1.0 - jnp.minimum(dx_edge, dy_edge) / margin, 0.0, 1.0)
 
         dist = jnp.linalg.norm((state.objective - air.pos)[:, :2], axis=-1)
-        arrive = (dist <= cfg.objective_radius) & state.alive & ~state.reached
+        arrive = (
+            (dist <= cfg.objective_radius)
+            & state.alive
+            & ~state.reached
+            & ~state.resource.diverted
+        )
+
+        if cfg.resource.enabled:
+            gate_dist = jnp.linalg.norm(
+                state.resource.diversion_pos[..., :2] - air.pos[:, None, :2], axis=-1
+            )
+            at_gate = jnp.any(
+                (gate_dist <= cfg.resource.gate_arrival_radius) & state.resource.diversion_active,
+                axis=-1,
+            )
+            diverted_now = (at_gate & ~arrive & ~shot & ~terrain_hit & ~oob & ~dry
+                             & state.alive & ~state.reached & ~state.resource.diverted)
+        else:
+            diverted_now = jnp.zeros((cfg.n_blue,), dtype=bool)
 
         alive = state.alive & ~shot & ~terrain_hit & ~oob
+        if cfg.resource.enabled:
+            alive = alive & ~dry
         reached = state.reached | arrive
 
         terms = RewardTerms(
@@ -449,6 +485,7 @@ class NaigosEnv:
             lock_level=jnp.max(lock, axis=0),
             envelope_dwell=jnp.max(in_env * (lock > 0.05), axis=0) * live,
             arrived=arrive.astype(jnp.float32),
+            diverted=diverted_now.astype(jnp.float32),
             shotdown=shot.astype(jnp.float32),
             fuel_used=jnp.where(frozen, 0.0, fuel_before - air.fuel),
             g_excess=jnp.where(frozen, 0.0, af_mod.load_factor(air.phi) - 1.0),
@@ -461,6 +498,13 @@ class NaigosEnv:
         )
 
         t = state.t + 1
+        diverted = state.resource.diverted | diverted_now
+        timeout = jnp.full((cfg.n_blue,), t >= cfg.max_steps) & alive & ~reached & ~diverted
+        outcome = resource_mod.outcome_update(
+            state.resource.outcome, arrive, diverted_now, shot, terrain_hit, oob,
+            dry if cfg.resource.enabled else jnp.zeros_like(dry), timeout,
+        )
+        rstate = state.resource._replace(diverted=diverted, outcome=outcome)
         new_state = EnvState(
             air=air,
             threats=tstate,
@@ -476,9 +520,10 @@ class NaigosEnv:
             key=key,
             route=state.route,
             red_scales=state.red_scales,
+            resource=rstate,
         )
 
-        agent_done = (~alive) | reached
+        agent_done = (~alive) | reached | diverted
         episode_done = jnp.all(agent_done) | (t >= cfg.max_steps)
 
         info = {
@@ -489,6 +534,8 @@ class NaigosEnv:
             "agent_done": agent_done,
             "n_alive": jnp.sum(alive),
             "n_reached": jnp.sum(reached),
+            "n_diverted": jnp.sum(diverted),
+            "outcome": outcome,
         }
         return new_state, self.observe(new_state), terms, episode_done, info
 
@@ -535,18 +582,24 @@ class NaigosEnv:
         objective = jnp.concatenate([obj_xy, (g_o + 1_000.0)[:, None]], axis=-1)
         to_obj = objective - start
 
+        fresh_air, fresh_resource = resource_mod.initial_state(
+            cfg, key, state.hmap, start, objective, state.bounds
+        )
         m = mask[:, None]
-        air = AircraftState(
-            pos=jnp.where(m, start, state.air.pos),
-            speed=jnp.where(mask, cfg.airframe.v_init, state.air.speed),
-            psi=jnp.where(mask, jnp.arctan2(to_obj[:, 1], to_obj[:, 0]), state.air.psi),
-            gamma=jnp.where(mask, 0.0, state.air.gamma),
-            phi=jnp.where(mask, 0.0, state.air.phi),
-            fuel=jnp.where(mask, cfg.airframe.fuel_init, state.air.fuel),
+        air = jax.tree.map(
+            lambda fresh, old: jnp.where(_bcast(mask, fresh), fresh, old),
+            fresh_air,
+            state.air,
+        )
+        resource = jax.tree.map(
+            lambda fresh, old: jnp.where(_bcast(mask, fresh), fresh, old),
+            fresh_resource,
+            state.resource,
         )
         clear = ~mask[None, :]
         return state._replace(
             air=air,
+            resource=resource,
             objective=jnp.where(m, objective, state.objective),
             prev_dist=jnp.where(mask, jnp.linalg.norm(to_obj[:, :2], axis=-1), state.prev_dist),
             alive=state.alive | mask,
@@ -616,6 +669,9 @@ class NaigosEnv:
                 "alt_agl": info["alt_agl"],
                 "alive": state2.alive,
                 "reached": state2.reached,
+                "diverted": state2.resource.diverted,
+                "outcome": state2.resource.outcome,
+                "reserve_fuel": state2.resource.reserve_fuel,
                 "action": action,
                 "cbf_feasible": feasible,
                 "terms": terms,

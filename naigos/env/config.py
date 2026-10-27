@@ -14,6 +14,10 @@ from dataclasses import dataclass, field
 
 G0 = 9.80665  # m/s^2
 
+RESOURCE_WORLD_BASELINE = "baseline-v0"
+RESOURCE_WORLD_L1 = "resource-world-v1/endurance"
+N_DIVERSION_GATES = 2
+
 # --- threat kinds -------------------------------------------------------------
 # Kinds are DATA, not an enum: the count and the parameters come from
 # `components/model.detection.json` via `naigos.env.theatre_bridge`, so the real
@@ -230,6 +234,36 @@ class SpatialHashConfig:
 
 
 @dataclass(frozen=True)
+class ResourceWorldConfig:
+    """Versioned, opt-in resource model.
+
+    The default is the shipped environment byte-for-byte: fuel remains the
+    existing non-terminal diagnostic and no resource features are appended to
+    the actor observation.  L1 turns endurance into a terminal constraint and
+    adds two abstract recovery gates; the values below are research assumptions,
+    not calibrated aircraft performance.
+    """
+
+    model: str = RESOURCE_WORLD_BASELINE
+    fuel_budget_ratio: tuple[float, float] = (1.25, 2.0)
+    reserve_ratio: tuple[float, float] = (0.10, 0.20)
+    burn_multiplier: tuple[float, float] = (0.85, 1.15)
+    gate_lateral_frac: float = 0.25
+    gate_arrival_radius: float = 2_000.0
+
+    @property
+    def enabled(self) -> bool:
+        return self.model == RESOURCE_WORLD_L1
+
+    @property
+    def observation_dim(self) -> int:
+        # fuel fraction, reserve fraction, endurance, primary margin, best
+        # diversion margin, burn estimate; then 2 gates x
+        # (body-frame x/y, range, bearing sin/cos, fuel margin, active).
+        return 6 + N_DIVERSION_GATES * 7 if self.enabled else 0
+
+
+@dataclass(frozen=True)
 class EnvConfig:
     """Top-level env spec. Padded, fixed-size -- everything is jit/vmap safe."""
 
@@ -246,6 +280,7 @@ class EnvConfig:
     detection: DetectionConfig = field(default_factory=DetectionConfig)
     terrain: TerrainConfig = field(default_factory=TerrainConfig)
     hash: SpatialHashConfig = field(default_factory=SpatialHashConfig)
+    resource: ResourceWorldConfig = field(default_factory=ResourceWorldConfig)
     threat_kinds: tuple[ThreatKindConfig, ...] = field(default_factory=default_threat_kinds)
 
     objective_radius: float = 3_000.0  # m, arrival tolerance (horizontal)
@@ -311,7 +346,7 @@ class EnvConfig:
     # --- observation feature widths (derived; kept here so nets can import) ---
     @property
     def ego_dim(self) -> int:
-        return 14 if self.obs_edge_features else 10
+        return (14 if self.obs_edge_features else 10) + self.resource.observation_dim
 
     @property
     def n_threat_kinds(self) -> int:
