@@ -84,6 +84,8 @@ from ..env.config import (
     RESOURCE_WORLD_L1,
     ResourceWorldConfig,
 )
+from ..env import mission as mission_mod
+from ..env import weather as weather_mod
 
 #: 1 = the policy-export format written before resume existed. 2 added
 #: `recovery`. 3 added the lifetime CMDP accumulators (`cost_accum`,
@@ -92,13 +94,15 @@ from ..env.config import (
 #: checkpoint directory (next-steps.md G-3). 5 adds explicit resource-world
 #: identity and configuration. A pre-4 checkpoint must go through the one-way
 #: converter; schema 4 remains a supported baseline recovery format.
-CHECKPOINT_SCHEMA = 5
-SUPPORTED_CHECKPOINT_SCHEMAS = (4, CHECKPOINT_SCHEMA)
+CHECKPOINT_SCHEMA = 6
+SUPPORTED_CHECKPOINT_SCHEMAS = (4, 5, CHECKPOINT_SCHEMA)
 
 BASELINE_OBSERVATION_SCHEMA = "Observation-v0"
 RESOURCE_OBSERVATION_SCHEMA = "L1EnduranceObservation-v1"
 BASELINE_ACTOR_SCHEMA = "ActorV1"
 RESOURCE_ACTOR_SCHEMA = "ActorV1+L1EnduranceInputs"
+PHYSICS_OBSERVATION_SCHEMA = "VehicleWeatherMissionObservation-v1"
+PHYSICS_ACTOR_SCHEMA = "ActorV1+VehicleWeatherMissionInputs"
 
 REQUIRED_RECOVERY_KEYS = (
     "iteration",
@@ -240,6 +244,9 @@ def save(
     run_name: str | None = None,
     code_commit: str | None = None,
     resumed_from: list | None = None,
+    urban_obstacle_digest: str | None = None,
+    cbf_contract_id: str = "hocbf-v1",
+    code_dirty: bool | None = None,
 ) -> Path:
     """Write one checkpoint atomically.
 
@@ -258,6 +265,11 @@ def save(
         family=ppo_cfg.policy_family,
         version=ppo_cfg.policy_version,
     )
+    identity = environment_identity_record(
+        env_cfg, urban_obstacle_digest=urban_obstacle_digest,
+        cbf_contract_id=cbf_contract_id, code_commit=code_commit, code_dirty=code_dirty,
+    )
+    identity["policy_family"] = f"{policy_spec.family.value}@{policy_spec.version}"
     blob = {
         # --- unchanged policy-export surface: the demo reads these ---
         "schema": CHECKPOINT_SCHEMA,
@@ -276,11 +288,10 @@ def save(
         # Environment/actor semantics. Their absence in an existing schema-4
         # checkpoint means baseline-v0; resource checkpoints never rely on that
         # fallback and carry the full fixed-capacity configuration explicitly.
-        "environment_model_id": env_cfg.resource.model,
-        "observation_schema_id": (
-            RESOURCE_OBSERVATION_SCHEMA if env_cfg.resource.enabled else BASELINE_OBSERVATION_SCHEMA
-        ),
-        "actor_schema_id": RESOURCE_ACTOR_SCHEMA if env_cfg.resource.enabled else BASELINE_ACTOR_SCHEMA,
+        "environment_model_id": env_cfg.environment_model_id,
+        "observation_schema_id": observation_schema_for_cfg(env_cfg),
+        "actor_schema_id": actor_schema_for_cfg(env_cfg),
+        "environment_identity": identity,
         "resource_config": dataclasses.asdict(env_cfg.resource),
         "resource_bank": (
             _resource_bank_record(env_cfg) if env_cfg.resource.enabled else None
@@ -558,7 +569,7 @@ def obs_config_from_blob(blob: dict) -> dict:
     """
     env_cfg = blob.get("env_cfg") or {}
     out = {"obs_edge_features": bool(env_cfg.get("obs_edge_features", False))}
-    if environment_model_from_blob(blob) == RESOURCE_WORLD_L1:
+    if isinstance(blob.get("resource_config"), dict) or environment_model_from_blob(blob) == RESOURCE_WORLD_L1:
         out["resource"] = resource_config_from_blob(blob)
     return out
 
@@ -579,16 +590,63 @@ def environment_model_from_blob(blob: dict) -> str:
     return str(blob.get("environment_model_id") or RESOURCE_WORLD_BASELINE)
 
 
+def observation_schema_for_cfg(cfg) -> str:
+    if cfg.weather.enabled or cfg.mission.enabled or cfg.urban.enabled:
+        return PHYSICS_OBSERVATION_SCHEMA
+    return RESOURCE_OBSERVATION_SCHEMA if cfg.resource.enabled else BASELINE_OBSERVATION_SCHEMA
+
+
+def actor_schema_for_cfg(cfg) -> str:
+    if cfg.weather.enabled or cfg.mission.enabled or cfg.urban.enabled:
+        return PHYSICS_ACTOR_SCHEMA
+    return RESOURCE_ACTOR_SCHEMA if cfg.resource.enabled else BASELINE_ACTOR_SCHEMA
+
+
+def environment_identity_record(
+    cfg,
+    *,
+    urban_obstacle_digest: str | None = None,
+    cbf_contract_id: str = "hocbf-v1",
+    code_commit: str | None = None,
+    code_dirty: bool | None = None,
+) -> dict:
+    """All identities that make a new-physics checkpoint resumable or not."""
+    if cfg.urban.enabled and not urban_obstacle_digest:
+        raise CheckpointError("urban checkpoint requires the validated obstacle artifact digest")
+    from ..env.scenario_bank import scenario_protocol
+
+    return {
+        "environment_model_id": cfg.environment_model_id,
+        "weather_schema": cfg.weather.schema_version,
+        "weather_config_sha256": weather_mod.config_digest(cfg.weather),
+        "turbulence_model_id": weather_mod.TURBULENCE_MODEL_ID if cfg.weather.enabled else None,
+        "turbulence_config_sha256": weather_mod.config_digest(cfg.weather) if cfg.weather.enabled else None,
+        "urban_obstacle_sha256": urban_obstacle_digest,
+        "urban_surface_schema": "terrain+naigos.urban_obstacles/1" if cfg.urban.enabled else "terrain-only",
+        "aircraft_physics_model": "fast-point-mass-weather-v1" if cfg.weather.enabled else "point-mass-v0",
+        "mission_schema": cfg.mission.schema_version,
+        "mission_config_sha256": mission_mod.config_digest(cfg.mission),
+        "mission_bank_sha256": scenario_protocol()["bank_sha256"] if cfg.mission.enabled else None,
+        "seed_stream_version": "named-streams-v1",
+        "policy_family": None,
+        "resource_model": cfg.resource.model,
+        "cbf_contract_id": cbf_contract_id,
+        "code_commit": code_commit,
+        "code_dirty": code_dirty,
+        "weather_config": json.loads(json.dumps(dataclasses.asdict(cfg.weather))),
+        "mission_config": json.loads(json.dumps(dataclasses.asdict(cfg.mission))),
+        "urban_config": json.loads(json.dumps(dataclasses.asdict(cfg.urban))),
+    }
+
+
 def resource_config_from_blob(blob: dict) -> ResourceWorldConfig:
     model = environment_model_from_blob(blob)
-    if model == RESOURCE_WORLD_BASELINE:
-        return ResourceWorldConfig()
-    if model != RESOURCE_WORLD_L1:
-        raise CheckpointError(f"checkpoint names unsupported environment model {model!r}")
     raw = blob.get("resource_config")
+    if model == RESOURCE_WORLD_BASELINE and not isinstance(raw, dict):
+        return ResourceWorldConfig()
     if not isinstance(raw, dict):
         raise CheckpointError(
-            f"{RESOURCE_WORLD_L1} checkpoint is missing its resource_config; implicit migration is refused"
+            f"{model} checkpoint is missing its resource_config; implicit migration is refused"
         )
     fields = {field.name for field in dataclasses.fields(ResourceWorldConfig)}
     values = {name: value for name, value in raw.items() if name in fields}
@@ -596,26 +654,33 @@ def resource_config_from_blob(blob: dict) -> ResourceWorldConfig:
         if name in values:
             values[name] = tuple(values[name])
     config = ResourceWorldConfig(**values)
-    if config.model != model:
+    if model in (RESOURCE_WORLD_BASELINE, RESOURCE_WORLD_L1) and config.model != model:
         raise CheckpointError(
             f"checkpoint environment_model_id {model!r} disagrees with resource_config.model {config.model!r}"
         )
     return config
 
 
-def require_environment_compatible(blob: dict, cfg, source) -> None:
+def require_environment_compatible(
+    blob: dict,
+    cfg,
+    source,
+    *,
+    urban_obstacle_digest: str | None = None,
+    cbf_contract_id: str = "hocbf-v1",
+) -> None:
     """Refuse cross-loading L0/ActorV1 and L1/ActorV2 checkpoints."""
     saved_model = environment_model_from_blob(blob)
     saved_obs = str(blob.get("observation_schema_id") or BASELINE_OBSERVATION_SCHEMA)
-    wanted_obs = RESOURCE_OBSERVATION_SCHEMA if cfg.resource.enabled else BASELINE_OBSERVATION_SCHEMA
+    wanted_obs = observation_schema_for_cfg(cfg)
     saved_actor = str(blob.get("actor_schema_id") or BASELINE_ACTOR_SCHEMA)
-    wanted_actor = RESOURCE_ACTOR_SCHEMA if cfg.resource.enabled else BASELINE_ACTOR_SCHEMA
-    if (saved_model, saved_obs, saved_actor) != (cfg.resource.model, wanted_obs, wanted_actor):
+    wanted_actor = actor_schema_for_cfg(cfg)
+    if (saved_model, saved_obs, saved_actor) != (cfg.environment_model_id, wanted_obs, wanted_actor):
         raise CheckpointError(
             f"{source}: checkpoint is {saved_model}/{saved_obs}/{saved_actor}, but the environment is "
-            f"{cfg.resource.model}/{wanted_obs}/{wanted_actor}; cross-schema loading is refused"
+            f"{cfg.environment_model_id}/{wanted_obs}/{wanted_actor}; cross-schema loading is refused"
         )
-    if cfg.resource.enabled and dataclasses.asdict(resource_config_from_blob(blob)) != dataclasses.asdict(cfg.resource):
+    if dataclasses.asdict(resource_config_from_blob(blob)) != dataclasses.asdict(cfg.resource):
         raise CheckpointError(f"{source}: checkpoint resource_config differs from the requested L1 environment")
     if cfg.resource.enabled:
         saved_bank = (blob.get("resource_bank") or {}).get("sha256")
@@ -625,9 +690,31 @@ def require_environment_compatible(blob: dict, cfg, source) -> None:
                 f"{source}: checkpoint resource bank digest {saved_bank!r} differs from this "
                 f"code's {want_bank!r}; the frozen L1 bank changed, resume is refused"
             )
+    if cfg.weather.enabled or cfg.mission.enabled or cfg.urban.enabled:
+        saved_identity = blob.get("environment_identity")
+        if not isinstance(saved_identity, dict):
+            raise CheckpointError(f"{source}: new-physics checkpoint is missing environment_identity")
+        wanted = environment_identity_record(
+            cfg,
+            urban_obstacle_digest=urban_obstacle_digest,
+            cbf_contract_id=cbf_contract_id,
+            code_commit=saved_identity.get("code_commit"),
+            code_dirty=saved_identity.get("code_dirty"),
+        )
+        # Policy family/version is validated independently by
+        # ``assert_policy_compatible`` where the requested PPO family exists.
+        wanted["policy_family"] = saved_identity.get("policy_family")
+        changed = sorted(k for k in wanted if saved_identity.get(k) != wanted.get(k))
+        if changed:
+            raise CheckpointError(
+                f"{source}: environment identity mismatch in {', '.join(changed)}; resume is refused"
+            )
 
 
-def require_resume_compatible(blob: dict, cfg, ppo_cfg, policy_spec, source) -> None:
+def require_resume_compatible(
+    blob: dict, cfg, ppo_cfg, policy_spec, source, *, urban_obstacle_digest: str | None = None,
+    cbf_contract_id: str = "hocbf-v1",
+) -> None:
     """Every identity a resumed run must share with its checkpoint, checked up front.
 
     Resource identity (model, observation schema, config, bank digest) and policy
@@ -635,7 +722,10 @@ def require_resume_compatible(blob: dict, cfg, ppo_cfg, policy_spec, source) -> 
     its own so the error names the axis that moved. A recurrent checkpoint also
     pins its truncated-BPTT sequence length, which changes the update.
     """
-    require_environment_compatible(blob, cfg, source)
+    require_environment_compatible(
+        blob, cfg, source, urban_obstacle_digest=urban_obstacle_digest,
+        cbf_contract_id=cbf_contract_id,
+    )
     assert_policy_compatible(blob, policy_spec)
     if policy_spec.memory_requirements.recurrent:
         saved = (blob.get("recovery") or {}).get("ppo", {}).get("recurrent_seq_len")
