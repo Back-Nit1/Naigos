@@ -389,6 +389,28 @@ def smoke_gate(profile: str, marker: dict | None, commit: str | None) -> str | N
     return None
 
 
+def verified_smoke_gate(profile: str, marker: dict | None, commit: str | None) -> str | None:
+    """Stricter smoke gate for unattended multi-run submissions.
+
+    The ordinary launcher preserves its historical best-effort behavior when
+    git identity is unknowable.  A matrix fan-out cannot safely make that
+    concession: before it starts any non-smoke run, both the requested commit
+    and a clean successful smoke marker for exactly that commit must exist.
+    """
+    if profile == "smoke":
+        return None
+    refusal = smoke_gate(profile, marker, commit)
+    if refusal:
+        return refusal
+    if not isinstance(commit, str) or not commit:
+        return "the current commit cannot be verified; matrix submission requires a committed revision"
+    if not isinstance(marker, dict) or marker.get("commit") != commit:
+        return "the smoke marker does not verify the current commit"
+    if marker.get("dirty") is not False:
+        return "the smoke marker was not produced from a clean worktree"
+    return None
+
+
 # --- output verification -----------------------------------------------------
 
 

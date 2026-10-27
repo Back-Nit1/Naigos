@@ -347,17 +347,36 @@ def _spawn(prof, name: str, meta: dict, spec: dict, *, gpu: str) -> str:
     return job_id
 
 
-def cmd_submit(a) -> int:
-    prof, name, code, meta = _build_launch(a)
+def submit_prepared(
+    prof,
+    name: str,
+    meta: dict,
+    spec: dict,
+    *,
+    gpu: str = GPU_KIND,
+    skip_smoke_gate: bool = False,
+    require_verified_smoke: bool = False,
+) -> str:
+    """Submit one fully described run through the existing deployed function.
 
-    # The smoke gate, unchanged: an expensive profile requires a smoke run that
-    # verified against THIS commit. The failures a smoke run catches -- a
-    # dependency missing from the image, an unmounted cache, an unwritable
-    # Volume, no GPU actually attached -- are exactly the ones a code change
-    # reintroduces, which is why the marker is stamped with a commit.
+    Matrix orchestration uses this seam instead of defining a second Modal app.
+    It preserves the same smoke gate, live-writer check, manifest and ``_spawn``
+    path as the ordinary ``submit`` command.  The consistency checks are before
+    every remote read, so malformed prepared work cannot partially submit.
+    """
+    name = runmeta.validate_run_name(name)
+    if meta.get("run_name") != name or spec.get("run_name") != name:
+        raise ValueError("prepared metadata/spec run_name does not match the requested run")
+    if meta.get("profile") != prof.name or (spec.get("profile") or {}).get("name") != prof.name:
+        raise ValueError("prepared metadata/spec profile does not match the resolved profile")
+    if (meta.get("code") or {}).get("commit") is None:
+        raise ValueError("prepared run has no code commit; remote training would be unreproducible")
+
+    code = meta["code"]
     marker = _read_volume_json(runmeta.SMOKE_MARKER)
-    refusal = runmeta.smoke_gate(prof.name, marker, code.get("commit"))
-    if refusal and not a.skip_smoke_gate:
+    gate = runmeta.verified_smoke_gate if require_verified_smoke else runmeta.smoke_gate
+    refusal = gate(prof.name, marker, code.get("commit"))
+    if refusal and not skip_smoke_gate:
         raise SystemExit(f"refusing to submit --profile {prof.name}: {refusal}")
     if refusal:
         print(f"[gate] OVERRIDDEN: {refusal}")
@@ -365,6 +384,11 @@ def cmd_submit(a) -> int:
         print("[gate] working tree is dirty; this run will not be reproducible from its commit")
 
     _check_not_live(name)
+    return _spawn(prof, name, meta, spec, gpu=gpu)
+
+
+def cmd_submit(a) -> int:
+    prof, name, code, meta = _build_launch(a)
     spec = {
         "profile": prof.as_dict(),
         "run_name": name,
@@ -377,7 +401,9 @@ def cmd_submit(a) -> int:
         "force_unlock": a.force_unlock,
         "job_id": None,
     }
-    job_id = _spawn(prof, name, meta, spec, gpu=GPU_KIND)
+    job_id = submit_prepared(
+        prof, name, meta, spec, gpu=GPU_KIND, skip_smoke_gate=a.skip_smoke_gate
+    )
     print(
         f"[submitted] run={name} job={job_id} profile={prof.name} gpu={GPU_KIND} "
         f"{prof.iterations} iterations x {prof.env_steps_per_iteration} env-steps "
