@@ -641,9 +641,45 @@ class NaigosEnv:
         )
 
     # ------------------------------------------------------------- rollouts --
-    def _trace_frame(self, state2, obs2, action, feasible, terms, done, info):
+    def evidence_frame(
+        self, state, obs, requested, executed, feasible, state2, terms, done, info,
+        memory=None, memory_after=None,
+    ):
+        """Raw evidence for one transition, for trajectory recording.
+
+        Everything is read from values the step already computed (no extra env
+        step). `obs`/`state` are the PRE-action pair, `state2` the post-step state
+        before any auto-reset. `memory`/`memory_after` are the recurrent carry
+        into and out of the action, `None` for feed-forward policies. Only
+        built when a caller asks for it, so default compiled programs are
+        unchanged.
+        """
+        res = state2.resource
+        ev = {
+            "obs_ego": obs.ego, "obs_threats": obs.threats, "obs_threat_mask": obs.threat_mask,
+            "obs_friends": obs.friends, "obs_friend_mask": obs.friend_mask,
+            "action_requested": requested, "action_executed": executed, "cbf_feasible": feasible,
+            "terms": terms._asdict(),
+            "fuel_before": state.air.fuel, "fuel_after": state2.air.fuel,
+            "alive": state2.alive, "reached": state2.reached, "diverted": res.diverted,
+            "outcome": res.outcome, "agent_done": info["agent_done"], "done": done,
+            "route": state.route,
+            "reserve_fuel": res.reserve_fuel, "initial_fuel": res.initial_fuel,
+            "burn_multiplier": res.burn_multiplier,
+            "diversion_pos": res.diversion_pos, "diversion_active": res.diversion_active,
+        }
+        if memory is not None:
+            ev["memory_before"], ev["memory_after"] = memory, memory_after
+        return ev
+
+    def _trace_frame(self, state2, obs2, action, feasible, terms, done, info, requested=None):
         """One rollout trace row. Shared by the stateless and recurrent scans so
-        both carry every L1 resource field."""
+        both carry every L1 resource field.
+
+        `action` is what the environment executed (after the optional CBF);
+        `requested` is what the policy asked for. `action` stays as a
+        backward-compatible alias of `action_executed`.
+        """
         return {
             "pos": state2.air.pos,
             "psi": state2.air.psi,
@@ -669,6 +705,8 @@ class NaigosEnv:
             if self.cfg.resource.enabled
             else jnp.zeros((self.cfg.n_blue, 0), dtype=obs2.ego.dtype),
             "action": action,
+            "action_executed": action,
+            "action_requested": action if requested is None else requested,
             "cbf_feasible": feasible,
             "terms": terms,
             "done": done,
@@ -680,7 +718,7 @@ class NaigosEnv:
             "firing": info["firing"],
         }
 
-    def rollout(self, key, policy, n_steps: int | None = None, action_filter=None, route=None):
+    def rollout(self, key, policy, n_steps: int | None = None, action_filter=None, route=None, record: bool = False):
         """Scan a whole episode. `policy(obs, key) -> (n_blue, 3)`.
 
         `route`, if given, is a (2,) [bearing rad, family id] and the episode
@@ -691,6 +729,11 @@ class NaigosEnv:
         between the policy and the env exactly as `a_exec = filter(a_policy,
         state)` describes, and its per-step feasibility flags are logged so the
         infeasibility rate can be reported rather than hidden.
+
+        `record=True` adds `traj["evidence"]` (see `evidence_frame`): the
+        pre-action observation, requested action and recurrent memory, taken
+        from the same scan -- no extra step. Off by default, and then the
+        compiled program is exactly the one without it.
 
         Returns `(final_state, traj)` where traj is a pytree stacked on a leading
         time axis -- the trace the verifier and the demo replay consume.
@@ -705,18 +748,24 @@ class NaigosEnv:
             def recurrent_body(carry, _):
                 state, obs, memory, k = carry
                 k, ka = jax.random.split(k)
-                action, memory = policy(obs, ka, memory)
+                requested, memory_next = policy(obs, ka, memory)
+                action = requested
                 if action_filter is None:
                     feasible = jnp.ones((self.cfg.n_blue,), dtype=bool)
                 else:
                     action, feasible = action_filter(state, obs, action)
                 state2, obs2, terms, done, info = self.step(state, action)
-                memory = jnp.where(
+                memory_next = jnp.where(
                     (info["agent_done"] | done)[..., None],
-                    jnp.zeros_like(memory), memory,
+                    jnp.zeros_like(memory_next), memory_next,
                 )
-                out = self._trace_frame(state2, obs2, action, feasible, terms, done, info)
-                return (state2, obs2, memory, k), out
+                out = self._trace_frame(state2, obs2, action, feasible, terms, done, info, requested)
+                if record:
+                    out["evidence"] = self.evidence_frame(
+                        state, obs, requested, action, feasible, state2, terms, done, info,
+                        memory, memory_next,
+                    )
+                return (state2, obs2, memory_next, k), out
 
             k0, k1 = jax.random.split(key)
             state, obs = self.reset(k0) if route is None else self.reset_route(k0, route)
@@ -729,13 +778,18 @@ class NaigosEnv:
         def body(carry, _):
             state, obs, k = carry
             k, ka = jax.random.split(k)
-            action = policy(obs, ka)
+            requested = policy(obs, ka)
+            action = requested
             if action_filter is None:
                 feasible = jnp.ones((self.cfg.n_blue,), dtype=bool)
             else:
                 action, feasible = action_filter(state, obs, action)
             state2, obs2, terms, done, info = self.step(state, action)
-            out = self._trace_frame(state2, obs2, action, feasible, terms, done, info)
+            out = self._trace_frame(state2, obs2, action, feasible, terms, done, info, requested)
+            if record:
+                out["evidence"] = self.evidence_frame(
+                    state, obs, requested, action, feasible, state2, terms, done, info
+                )
             return (state2, obs2, k), out
 
         k0, k1 = jax.random.split(key)

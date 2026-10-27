@@ -213,7 +213,7 @@ def init_rollout(env: NaigosEnv, ppo: PPOConfig, key, red_scales=None):
     return (state, obs) if memory is None else (state, obs, memory)
 
 
-def _make_feedforward_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
+def _make_feedforward_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights, record: bool = False):
     """Build a jit-able `train_step(learner, rollout, key) -> (learner, rollout, metrics)`."""
     cfg = env.cfg
     actor_apply = nets.Actor(cfg).apply
@@ -249,6 +249,12 @@ def _make_feedforward_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeigh
                 agent_done_bool = info["agent_done"] | done
                 agent_done = agent_done_bool.astype(jnp.float32)
                 completed = completed_agent_mask(live, agent_done_bool).astype(jnp.float32)
+                # Recording only: the pre-reset transition, so the terminal step
+                # keeps its own episode's state. PPO has no CBF, hence
+                # requested == executed and every step is feasible.
+                evidence = env.evidence_frame(
+                    st, ob, act, act, jnp.ones((cfg.n_blue,), dtype=bool), st2, terms, done, info
+                ) if record else None
                 # auto-reset: a finished world starts a fresh episode in place
                 # Carry the ending episode's own red_scales forward (next-steps.md
                 # G-4): a mid-rollout auto-reset must respawn at the level the
@@ -263,6 +269,8 @@ def _make_feedforward_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeigh
                     shot=terms.shotdown, arrived=terms.arrived, exposure=terms.exposure,
                     progress=terms.progress, reset=done.astype(jnp.float32),
                 )
+                if record:
+                    out["evidence"] = evidence
                 return (st2, ob2, kk), out
 
             (st_f, ob_f, _), traj = jax.lax.scan(body, (state, obs, k), None, length=ppo.n_steps)
@@ -400,17 +408,21 @@ def _make_feedforward_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeigh
             "explained_var": jnp.where(ret_var > 0, 1.0 - err_var / jnp.where(ret_var > 0, ret_var, 1.0), 0.0),
             **jax.tree.map(jnp.mean, aux),
         }
-        return Learner(
+        learner = Learner(
             actor=actor, critic=critic, lam_raw=lam_raw, lam_opt=lam_opt,
             cost_accum=cost_accum, episode_accum=episode_accum,
-        ), rollout, metrics
+        )
+        if record:
+            # (time, env, ...) evidence of the segment that was just collected
+            return learner, rollout, metrics, traj["evidence"]
+        return learner, rollout, metrics
 
     train_step.collect = collect  # exposed so tests can inspect the raw segment
     train_step.loss_fn = loss_fn  # exposed so tests can check the live mask
     return train_step
 
 
-def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
+def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights, record: bool = False):
     """Sequence-minibatched PPO for the explicit-state GRU actor."""
 
     cfg = env.cfg
@@ -464,6 +476,10 @@ def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights
                 # Memory is zero for any aircraft that reached, died, diverted
                 # or whose world resets, and stays zero while frozen.
                 mem2 = policies.reset_memory(mem2, agent_done_bool | ~live)
+                evidence = env.evidence_frame(
+                    st, ob, act, act, jnp.ones((cfg.n_blue,), dtype=bool), st2, terms, done, info,
+                    mem, mem2,
+                ) if record else None
                 st_r, ob_r = env.reset(kr, st.red_scales)
                 st2, ob2 = jax.tree.map(
                     lambda a, b: jnp.where(done, a, b),
@@ -478,6 +494,8 @@ def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights
                     arrived=terms.arrived, exposure=terms.exposure,
                     progress=terms.progress, reset=done.astype(jnp.float32),
                 )
+                if record:
+                    out["evidence"] = evidence
                 return (st2, ob2, mem2, kk), out
 
             (st_f, ob_f, mem_f, _), traj = jax.lax.scan(
@@ -645,25 +663,34 @@ def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights
             ),
             **jax.tree.map(jnp.mean, aux),
         }
-        return Learner(
+        learner = Learner(
             actor=actor, critic=critic, lam_raw=lam_raw, lam_opt=lam_opt,
             cost_accum=cost_accum, episode_accum=episode_accum,
-        ), rollout, metrics
+        )
+        if record:
+            # (time, env, ...) evidence of the segment that was just collected
+            return learner, rollout, metrics, traj["evidence"]
+        return learner, rollout, metrics
 
     train_step.collect = collect
     train_step.loss_fn = loss_fn
     return train_step
 
 
-def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights):
-    """Build the policy-family-specific jittable PPO update."""
+def make_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights, record: bool = False):
+    """Build the policy-family-specific jittable PPO update.
+
+    `record=True` makes `train_step` return a 4th value, the segment's raw
+    transition evidence (`NaigosEnv.evidence_frame`, time-major). Nothing about
+    the update, its RNG or its numerics changes.
+    """
 
     spec = policies.get_policy_spec(
         env.cfg, family=ppo.policy_family, version=ppo.policy_version
     )
     if spec.memory_requirements.recurrent:
-        return _make_recurrent_train(env, ppo, weights)
-    return _make_feedforward_train(env, ppo, weights)
+        return _make_recurrent_train(env, ppo, weights, record)
+    return _make_feedforward_train(env, ppo, weights, record)
 
 
 def greedy_policy(
