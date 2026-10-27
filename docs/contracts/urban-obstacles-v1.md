@@ -137,6 +137,20 @@ theatre **fails closed** if its `data.urban_obstacles` component or the artifact
 missing or corrupt. There is no fallback to OSM, provider tiles or the DEM. AOIs without the block
 are unchanged and have no urban obstacles.
 
+## Viewer
+
+`naigos.demo.physics_urban` (presentation side, reads this module's loader only) reports the
+artifact as `/scene` `physics_urban`: `state` (`not_declared` | `available` | `unavailable`),
+`evidence_grade`, `geometry_source` (`physics_obstacle_artifact` or null), the artifact's
+`evidence()` (schema, three hashes, resolution, coverage, sources, build commit) and a reason
+that names the fix. No path and no credential appears. `--visual physics` also serves it at
+`/physics_urban` (404 in every other mode) as `naigos.physics_urban.page/1`: decimetre int16
+ground and top, a flags byte, and four WGS84 corners; a physics export embeds it, a presentation
+export embeds only the status. The page draws a flat top per obstacle cell and a wall wherever
+the neighbour is lower or unknown, cell for cell, and the HUD keeps it on a separate line from the
+two presentation layers. A missing or corrupt artifact is `unavailable`: the HUD says so and draws
+nothing in its place.
+
 ## Out of scope
 
 Weather, aircraft dynamics, collision response, rewards and observations are consumers of this
