@@ -11,6 +11,7 @@ import numpy as np
 from naigos.env.config import DetectionConfig, EnvConfig, TerrainConfig
 from naigos.env.flight_env import NaigosEnv
 from naigos.rl import policies
+from naigos.rl import checkpoint as ckpt
 from naigos.rl.ppo import (
     PPOConfig,
     greedy_policy,
@@ -19,6 +20,8 @@ from naigos.rl.ppo import (
     make_train,
 )
 from naigos.rl.reward import RewardWeights
+from naigos.rl.red_team import RedCurriculum
+from naigos.rl.reward import RewardCurriculum
 
 
 CFG = EnvConfig(
@@ -114,4 +117,61 @@ def test_greedy_recurrent_rollout_resets_memory_at_episode_boundary():
     # memory across that boundary, this would be 0.75 instead of fresh zero.
     np.testing.assert_array_equal(np.asarray(traj["action"][-1, :, 0]), 0.0)
     assert int(final.t) == CFG.max_steps + 1
+
+
+def _checkpoint(path, learner, key):
+    return ckpt.save(
+        path,
+        learner=learner,
+        key=key,
+        iteration=2,
+        red_level=0.0,
+        shootdown_rate=0.0,
+        survival_rate=1.0,
+        survival_w=1.0,
+        efficiency_w=0.0,
+        history=[],
+        env_cfg=CFG,
+        ppo_cfg=PPO,
+        red_curriculum=RedCurriculum(),
+        reward_curriculum=RewardCurriculum(),
+        reward_weights_base=RewardWeights(),
+        wall_s=1.0,
+    )
+
+
+def test_recurrent_checkpoint_identity_and_two_restores_are_exact(tmp_path):
+    env, learner, _, key = _setup()
+    path = _checkpoint(tmp_path / "ckpt_000002", learner, key)
+    blob = ckpt.load(path)
+    identity = ckpt.policy_identity(blob)
+    spec = policies.get_policy_spec(CFG, family="recurrent")
+    assert (identity["family"], identity["version"]) == ("recurrent", "1")
+    assert identity["spec_sha256"] == spec.sha256
+
+    _, obs = env.reset(jax.random.PRNGKey(99))
+    template = init_learner(jax.random.PRNGKey(99), CFG, PPO, obs)
+    first = ckpt.restore_learner(template, blob, expected_policy=spec)
+    second = ckpt.restore_learner(template, blob, expected_policy=spec)
+    for a, b in zip(jax.tree.leaves(first), jax.tree.leaves(second)):
+        np.testing.assert_array_equal(np.asarray(a), np.asarray(b))
+
+    # In-flight recurrent memory is deliberately not checkpointed: resume
+    # restarts episodes and therefore starts every aircraft at zero.
+    resumed_rollout = init_rollout(env, PPO, jax.random.PRNGKey(100))
+    np.testing.assert_array_equal(np.asarray(resumed_rollout[2]), 0.0)
+
+
+def test_metadata_free_checkpoint_migrates_only_as_deepsets_v1():
+    legacy = {"actor": {}}
+    identity = ckpt.policy_identity(legacy)
+    assert identity["migrated_legacy_default"] is True
+    assert (identity["family"], identity["version"]) == ("deepsets", "1")
+    recurrent = policies.get_policy_spec(CFG, family="recurrent")
+    try:
+        ckpt.assert_policy_compatible(legacy, recurrent)
+    except ckpt.CheckpointError as exc:
+        assert "deepsets@1" in str(exc) and "recurrent@1" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("legacy DeepSets checkpoint accepted as recurrent")
 
