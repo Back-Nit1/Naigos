@@ -43,12 +43,13 @@ NYC_FOOTPRINTS_VIEW = "https://data.cityofnewyork.us/api/views/5zhs-2jue.json"
 #: Per theatre: the EPT collection that covers its physics box and how deep to read it.
 #: ``max_depth`` bounds the download: nominal point spacing halves per level.
 LIDAR = {
-    "nyc_harbor": {"collection": "NY_NewYorkCity", "max_depth": 7},
-    "los_angeles_basin": {"collection": "CA_LosAngeles_1_B23", "max_depth": 10},
+    "nyc_harbor": {"collection": "NY_NewYorkCity", "max_depth": 7, "tnm_project": "NY_New_York"},
+    "los_angeles_basin": {"collection": "CA_LosAngeles_1_B23", "max_depth": 10, "tnm_project": "CA LosAngeles"},
 }
 STRUCTURE_CLASSES = (6, 17)  # building, bridge deck
 GROUND_CLASSES = (2, 9)  # ground, water
 MIN_STRUCTURE_POINTS = 2  # returns in a cell before it can be a structure
+SPIKE_MARGIN_M = 60.0  # a cell this far, and 3x, above its tallest neighbour is classification noise
 MIN_STRUCTURE_HEIGHT_M = 3.0  # below this a cell is a vehicle/shed/noise, not an obstacle
 COVERAGE_RADIUS_M = 30.0  # a cell is surveyed if a lidar return lies this close
 WATER_ELEVATION_M = 2.0  # DEM at/below this inside the collection counts as surveyed open water
@@ -88,19 +89,18 @@ class GridSpec:
                      for e, n in ((e0, n0), (e1, n0), (e1, n1), (e0, n1)))
 
 
-def reference_env_origin(aoi: AOI) -> tuple[float, float]:
+def reference_env_origin(dem_npz: Path) -> tuple[float, float]:
     """The ENU origin of the theatre's reference env: ``env_from_theatre`` at 1500 m, centred."""
     from ...data.enu import natural_grid_shape, real_terrain
     from ...data.terrain import TerrainGrid
-    from ...data.theatre import _dem_path
 
-    grid = TerrainGrid.from_npz(_dem_path(aoi.name))
+    grid = TerrainGrid.from_npz(dem_npz)
     nx, ny = natural_grid_shape(1500.0, grid)
     g = real_terrain(nx=nx, ny=ny, cell_m=1500.0, grid=grid)
     return (g.origin_easting_m, g.origin_northing_m)
 
 
-def grid_spec(aoi: AOI, env_origin: tuple[float, float] | None = None) -> GridSpec:
+def grid_spec(aoi: AOI, env_origin: tuple[float, float]) -> GridSpec:
     """The largest lattice-aligned grid inside ``aoi.urban_physics.bounds`` (UTM inner rectangle)."""
     from pyproj import Transformer
 
@@ -110,7 +110,7 @@ def grid_spec(aoi: AOI, env_origin: tuple[float, float] | None = None) -> GridSp
     if spec is None:
         raise ValueError(f"{aoi.name} has no urban_physics block")
     epsg = utm_epsg(*aoi.center)
-    env = env_origin if env_origin is not None else reference_env_origin(aoi)
+    env = env_origin
     tf = Transformer.from_crs("EPSG:4326", f"EPSG:{epsg}", always_xy=True)
     w, s, e, n = spec.bounds
     (esw, nsw), (ese, nse), (ene, nne), (enw, nnw) = (tf.transform(*p) for p in ((w, s), (e, s), (e, n), (w, n)))
@@ -283,6 +283,7 @@ def lidar_products(aoi: AOI, bbox: tuple[float, float, float, float], force: boo
                       f"urban_src/{aoi.name}_{aoi.fingerprint}_tnm_products.json", force=force,
                       validate=lambda b: b.lstrip()[:1] == b"{")
     items = json.loads(art.abs_path.read_bytes()).get("items", [])
+    items = [i for i in items if LIDAR[aoi.name]["tnm_project"] in i["title"]]
     return [{"title": i["title"], "publicationDate": i.get("publicationDate")} for i in items]
 
 
@@ -342,6 +343,24 @@ def _fill_nearest(a: np.ndarray) -> np.ndarray:
             fill = np.nanmean(nb, axis=0)
         out = np.where(gap, fill, out)
     return out
+
+
+def despike(height: np.ndarray, count: np.ndarray) -> tuple[np.ndarray, int]:
+    """Replace isolated, sparsely sampled height spikes (birds, cranes, misclassified noise).
+
+    A cell is a spike when it stands SPIKE_MARGIN_M and three times above the tallest of its eight
+    neighbours (aircraft and birds classified as building return many points, so the point count
+    is no guard). It is lowered to that neighbour, or dropped if the neighbourhood has no
+    structure. A tall tower's cells have tall neighbours and are untouched; a lone mast taller than
+    three times everything around it would be lowered, a limit documented in the artifact notes.
+    """
+    h = np.nan_to_num(height, nan=0.0)
+    pad = np.pad(h, 1)
+    nb = np.max(np.stack([pad[1 + dy: 1 + dy + h.shape[0], 1 + dx: 1 + dx + h.shape[1]]
+                          for dy in (-1, 0, 1) for dx in (-1, 0, 1) if (dy or dx)]), axis=0)
+    spike = np.isfinite(height) & (h > nb + SPIKE_MARGIN_M) & (h > 3.0 * nb)
+    out = np.where(spike, np.where(nb >= MIN_STRUCTURE_HEIGHT_M, nb, np.nan), height)
+    return out, int(spike.sum())
 
 
 def lidar_rasters(points: dict[str, np.ndarray], gs: GridSpec) -> dict[str, np.ndarray]:
@@ -441,10 +460,10 @@ def exclusion_mask(aoi: AOI, gs: GridSpec) -> list[tuple[Any, np.ndarray]]:
     return out
 
 
-def build_artifact(aoi: AOI, cache_root: Path | None = None, force: bool = False,
+def build_artifact(aoi: AOI, dem_npz: Path, cache_root: Path | None = None, force: bool = False,
                    build: uo.BuildInfo | None = None) -> tuple[uo.UrbanObstacleGrid, Path, dict[str, Any], list[cache.Artifact]]:
     """Run the pipeline and publish the artifact. Returns (grid, directory, evidence, inputs)."""
-    gs = grid_spec(aoi)
+    gs = grid_spec(aoi, reference_env_origin(dem_npz))
     ground_art = fetch_ground(aoi, gs, force)
     dem = sample_ground(ground_art, gs)
     pts_art = fetch_points(aoi, gs, force)
@@ -463,14 +482,15 @@ def build_artifact(aoi: AOI, cache_root: Path | None = None, force: bool = False
                            "refusing to build on a datum/unit mismatch")
 
     base = _fill_nearest(ras["ground"])
-    lid_h = ras["top"] - base
+    lid_h, n_spikes = despike(ras["top"] - base, ras["count"])
     lid_mask = (ras["count"] >= MIN_STRUCTURE_POINTS) & (lid_h >= MIN_STRUCTURE_HEIGHT_M)
     height = np.where(lid_mask, lid_h, np.nan)
     unc_cell = np.where(lid_mask, np.where(ras["count"] >= 5, 1.5, 3.0), np.nan)
     sources_extra: list[uo.UrbanSource] = []
     inputs = [ground_art, pts_art]
     stats: dict[str, Any] = {"lidar_ground_minus_dem_median_m": round(ground_offset, 3),
-                             "lidar_points_kept": pm["points_kept"], "lidar_nodes": len(pm["nodes"])}
+                             "lidar_points_kept": pm["points_kept"], "lidar_nodes": len(pm["nodes"]),
+                             "lidar_spike_cells_repaired": n_spikes}
 
     fp_art = None
     if aoi.name == "nyc_harbor":
@@ -523,7 +543,8 @@ def build_artifact(aoi: AOI, cache_root: Path | None = None, force: bool = False
     cap = (pm["captured_min"] if pm["captured_min"] == pm["captured_max"]
            else f"{pm['captured_min']} .. {pm['captured_max']}") if pm["captured_min"] else "unknown (no adjusted GPS time)"
     pub = max((p["publicationDate"] for p in products if p.get("publicationDate")), default="unknown")
-    titles = "; ".join(sorted({p["title"] for p in products})) or "none listed by TNM for this box"
+    projects = sorted({p["title"].replace("USGS Lidar Point Cloud ", "").rsplit(" ", 1)[0] for p in products})
+    titles = f"{len(products)} TNM tiles of " + ", ".join(projects) if products else "no TNM product listed for this box"
     sources = [
         _source("usgs_3dep_dem", "USGS 3DEP bare-earth DEM", f"3DEP best-available, {aoi.urban_physics.cell_m:g} m", "ground",
                 "usgs_3dep", ground_art, "varies by source tile (3DEP seamless mosaic)", "unknown (service mosaic)"),
@@ -541,7 +562,8 @@ def build_artifact(aoi: AOI, cache_root: Path | None = None, force: bool = False
         exclusions=tuple(exclusions),
         notes=(f"max-per-cell structure top over a {gs.cell:g} m cell (conservative: any structure in the cell "
                f"blocks it); lidar nominal spacing at EPT depth {LIDAR[aoi.name]['max_depth']}; structure heights "
-               "are lower bounds for spires and masts; classification is the provider's"))
+               "are lower bounds for spires and masts; isolated spikes >60 m and 3x above all neighbours are "
+               "repaired as classification noise; classification is the provider's"))
     grid = uo.build_urban_obstacle_grid(meta, ground_amsl_m=ground, top_amsl_m=top, coverage=covered.astype(np.uint8),
                                         building=is_b.astype(np.uint8), uncertainty_m=unc)
     root = cache_root if cache_root is not None else cache.cache_dir()

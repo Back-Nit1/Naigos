@@ -167,7 +167,7 @@ def build(
 
     # --- physics-grade urban obstacles (opt-in per theatre) ------------------------------
     if aoi.urban_physics is not None:
-        written.append(str(_write_urban_obstacles_component(aoi, force)))
+        written.append(str(_write_urban_obstacles_component(aoi, force, dem_npz.abs_path)))
 
     # --- airfields ---------------------------------------------------------------------
     print("[2/6] airfields (OurAirports)", file=sys.stderr)
@@ -374,7 +374,7 @@ def build(
     return {"components": written, "artifacts": sorted(cache.load_manifest())}
 
 
-def _write_urban_obstacles_component(aoi, force: bool):
+def _write_urban_obstacles_component(aoi, force: bool, dem_npz):
     """Build the urban obstacle artifact and cite it as ``data.urban_obstacles``.
 
     Separate from ``data.terrain_dem`` on purpose: the DEM is the terrain surface, this is the
@@ -385,7 +385,7 @@ def _write_urban_obstacles_component(aoi, force: bool):
     from .sources import urban_physics
 
     print("[1b/6] urban obstacles (physics-grade, docs/contracts/urban-obstacles-v1.md)", file=sys.stderr)
-    grid, path, stats, inputs = urban_physics.build_artifact(aoi, force=force)
+    grid, path, stats, inputs = urban_physics.build_artifact(aoi, dem_npz, force=force)
     m, h = grid.meta, grid.hashes
     arts = []
     for fname in (uo.PAYLOAD_FILE, uo.METADATA_FILE, uo.DESCRIPTOR_FILE):

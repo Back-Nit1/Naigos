@@ -1,0 +1,196 @@
+{
+  "id": "data.urban_obstacles",
+  "role": "Physics-grade structure surface: the only urban geometry the env may collide with.",
+  "inputs": [
+    "AOI urban_physics box",
+    "USGS 3DEP bare-earth DEM",
+    "USGS 3DEP lidar point cloud",
+    "NYC Building Footprints"
+  ],
+  "outputs": [
+    "versioned immutable obstacle raster (ground, top, height, coverage, building, uncertainty)"
+  ],
+  "decision": "Rasterise structures to a 10 m grid (500 x 493) inside the documented urban physics box, keep coverage explicit, and refuse to run the theatre without it.",
+  "rationale": "3DEP is a bare-earth surface, so cities are invisible to line of sight and collision without a separate structure layer. Public-domain lidar gives measured structure tops; cells are conservative (any structure in the cell blocks it) and unknown cells stay unknown rather than becoming open air or zero-height buildings. Presentation geometry (OSM, provider tiles) is a different cache namespace and never substitutes.",
+  "parameters": {
+    "schema": "naigos.urban_obstacles",
+    "schema_version": 1,
+    "content_sha256": "2d463a17d58b58d005d30d65226d37cbbf07dc9576604b7a1501aed706fe7bc8",
+    "metadata_sha256": "8cd55d6602973d03bb6fe80816fed82e024735a67f20fd94c71a3813ed65ff35",
+    "payload_sha256": "138295a8d37bc9732cebe60a039a94e0f5e80f0563d90fbb597430743ae77529",
+    "artifact_dir": "urban_physics/nyc_harbor/2d463a17d58b58d0",
+    "cell_m": 10.0,
+    "nx": 500,
+    "ny": 493,
+    "physics_bounds_wgs84": [
+      -74.025,
+      40.695,
+      -73.965,
+      40.74
+    ],
+    "utm_epsg": 32618,
+    "env_origin_utm_m": [
+      551485.1523361261,
+      4482610.980848956
+    ],
+    "grid_origin_enu_m": [
+      30900.0,
+      22810.0
+    ],
+    "aoi_fingerprint": "997eeb1b1c"
+  },
+  "evidence": {
+    "lidar_ground_minus_dem_median_m": -0.033,
+    "lidar_points_kept": 12986113,
+    "lidar_nodes": 295,
+    "lidar_spike_cells_repaired": 17,
+    "footprint_records": 15166,
+    "cells_footprint_only": 19016,
+    "cells_lidar_only": 40654,
+    "cells_both": 71987,
+    "footprint_vs_lidar_height_median_diff_m": -0.63,
+    "footprint_vs_lidar_height_median_abs_diff_m": 2.83,
+    "schema": "naigos.urban_obstacles",
+    "schema_version": 1,
+    "content_sha256": "2d463a17d58b58d005d30d65226d37cbbf07dc9576604b7a1501aed706fe7bc8",
+    "metadata_sha256": "8cd55d6602973d03bb6fe80816fed82e024735a67f20fd94c71a3813ed65ff35",
+    "payload_sha256": "138295a8d37bc9732cebe60a039a94e0f5e80f0563d90fbb597430743ae77529",
+    "aoi": "nyc_harbor",
+    "aoi_fingerprint": "997eeb1b1c",
+    "cell_m": 10.0,
+    "nx": 500,
+    "ny": 493,
+    "coverage_fraction": 0.976316,
+    "building_cells": 130120,
+    "max_height_agl_m": 547.8720092773438,
+    "sources": [
+      {
+        "key": "usgs_3dep_dem",
+        "product_id": "3DEP best-available, 10 m",
+        "licence": "Public domain (US Government work, USGS)",
+        "captured": "varies by source tile (3DEP seamless mosaic)",
+        "published": "unknown (service mosaic)"
+      },
+      {
+        "key": "usgs_3dep_lidar",
+        "product_id": "NY_NewYorkCity; TNM: 16 TNM tiles of NY_New_York_CMGP_SANDY_LiDAR_15",
+        "licence": "Public domain (US Government work, USGS)",
+        "captured": "2013-08-05 .. 2014-04-21",
+        "published": "2015-04-14"
+      },
+      {
+        "key": "nyc_building_footprints",
+        "product_id": "NYC Open Data 5zhs-2jue",
+        "licence": "NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source)",
+        "captured": "feature last-edited 2006-09-25 .. 2026-10-15 (heights from city lidar/photogrammetry)",
+        "published": "2026-10-25"
+      }
+    ],
+    "code_commit": "ac732305d6502676762065561cae5aa2c4fb036c",
+    "dirty": true,
+    "excluded_cells": 5823
+  },
+  "invariants": [
+    "Loaded only through naigos.data.urban_obstacles.load_urban_obstacles with an ExpectedFrame.",
+    "A missing, partial or corrupt artifact is an error for this theatre; there is no fallback.",
+    "Unknown cells (coverage 0) are NaN, never zero-height buildings.",
+    "No OSM, provider-tile or screenshot-derived geometry enters this artifact."
+  ],
+  "caveats": [
+    "Lidar is a capture-date snapshot (see sources[].captured); it is not current conditions.",
+    "Structure heights are per-cell maxima at the stated resolution: thin spires and masts are lower bounds, and a 10 m cell cannot resolve street canyons or building gaps narrower than a cell.",
+    "Point classification (building, bridge deck, ground) is the data provider's.",
+    "Protected-zone exclusions are no-data, so those areas are unknown rather than open."
+  ],
+  "license": "NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source); Public domain (US Government work, USGS)",
+  "sources": [
+    {
+      "key": "usgs_3dep",
+      "name": "USGS 3D Elevation Program (3DEP)",
+      "license": "Public domain (US Government work, USGS)",
+      "license_url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits",
+      "citation": "U.S. Geological Survey, 3D Elevation Program (3DEP) 1/3 arc-second Digital Elevation Model. USGS National Map 3DEP Dynamic Service.",
+      "docs": [
+        "https://www.usgs.gov/3d-elevation-program"
+      ],
+      "attribution_required": false,
+      "notes": "CONUS coverage only. Non-US areas of interest must fall back to Copernicus GLO-30."
+    },
+    {
+      "key": "usgs_3dep_lidar",
+      "name": "USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data)",
+      "license": "Public domain (US Government work, USGS)",
+      "license_url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits",
+      "citation": "U.S. Geological Survey, 3D Elevation Program (3DEP) lidar point clouds, distributed as Entwine Point Tiles in the usgs-lidar-public AWS open-data bucket; product dates from the USGS National Map Access API.",
+      "docs": [
+        "https://www.usgs.gov/3d-elevation-program",
+        "https://usgs.entwine.io/"
+      ],
+      "attribution_required": false,
+      "notes": "Fetched only by naigos.research.sources.urban_physics, bounded to a documented urban physics box, and cached with a sha256 per tile. Point classification is the data provider's, not ours; its accuracy is a stated limitation of every artifact."
+    },
+    {
+      "key": "nyc_building_footprints",
+      "name": "NYC Building Footprints (NYC Open Data, DoITT/OTI)",
+      "license": "NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source)",
+      "license_url": "https://www.nyc.gov/html/data/terms.html",
+      "citation": "City of New York, Office of Technology and Innovation, Building Footprints (NYC Open Data dataset 5zhs-2jue), derived from the city's 3D Building Model and aerial lidar.",
+      "docs": [
+        "https://data.cityofnewyork.us/City-Government/Building-Footprints/5zhs-2jue"
+      ],
+      "attribution_required": true,
+      "notes": "Only footprint geometry and roof height reach the artifact. No building identifier, address, owner or use class is kept, so nothing in a scene or export identifies a particular building."
+    }
+  ],
+  "cached_artifacts": [
+    {
+      "key": "urban_physics/nyc_harbor/2d463a17d58b58d0/payload.bin",
+      "path": "urban_physics/nyc_harbor/2d463a17d58b58d0/payload.bin",
+      "bytes": 4437000,
+      "sha256": "138295a8d37bc9732cebe60a039a94e0f5e80f0563d90fbb597430743ae77529",
+      "fetched_at": "2026-10-27T20:54:22Z",
+      "url": "derived"
+    },
+    {
+      "key": "urban_physics/nyc_harbor/2d463a17d58b58d0/metadata.json",
+      "path": "urban_physics/nyc_harbor/2d463a17d58b58d0/metadata.json",
+      "bytes": 4725,
+      "sha256": "8cd55d6602973d03bb6fe80816fed82e024735a67f20fd94c71a3813ed65ff35",
+      "fetched_at": "2026-10-27T20:54:22Z",
+      "url": "derived"
+    },
+    {
+      "key": "urban_physics/nyc_harbor/2d463a17d58b58d0/descriptor.json",
+      "path": "urban_physics/nyc_harbor/2d463a17d58b58d0/descriptor.json",
+      "bytes": 360,
+      "sha256": "cfabfa9c3c8ea38e981a6907a8c586770020f1bf6bdb6eab14e8c1c89cd73f1f",
+      "fetched_at": "2026-10-27T20:54:22Z",
+      "url": "derived"
+    },
+    {
+      "key": "urban_ground/nyc_harbor/997eeb1b1c/10m",
+      "path": "urban_src/nyc_harbor_997eeb1b1c_ground_10m_utm.tif",
+      "bytes": 1208933,
+      "sha256": "69c933873a5fc7d94a8e0a4546ab94ad4db3256ecec7c6c5f7db15fdf5012ddd",
+      "fetched_at": "2026-10-27T20:51:40Z",
+      "url": "https://elevation.nationalmap.gov/arcgis/rest/services/3DEPElevation/ImageServer"
+    },
+    {
+      "key": "urban_lidar/nyc_harbor/997eeb1b1c/10m",
+      "path": "urban_src/nyc_harbor_997eeb1b1c_lidar_subset.npz",
+      "bytes": 272739086,
+      "sha256": "958fcbe05bdd6f148f2760041fca1c20081e21df4f4eb498e89d3a6040f63de4",
+      "fetched_at": "2026-10-27T20:52:32Z",
+      "url": "https://usgs-lidar-public.s3.amazonaws.com/NY_NewYorkCity/ept.json"
+    },
+    {
+      "key": "nyc_footprints/nyc_harbor/997eeb1b1c",
+      "path": "urban_src/nyc_harbor_997eeb1b1c_nyc_footprints.json",
+      "bytes": 9502719,
+      "sha256": "be97d008c8a9d14cbaabe79ee3b4828ecbba203a25ae7be9fd6b6ac077198492",
+      "fetched_at": "2026-10-27T20:52:45Z",
+      "url": "https://data.cityofnewyork.us/resource/5zhs-2jue.json?$select=the_geom,height_roof,ground_elevation,last_edited_date,last_status_type,geom_source&$where=within_box(the_geom,40.69457453835943,-74.02588828636205,40.74046509852127,-73.96402959354405)&$limit=200000"
+    }
+  ],
+  "generated_at": "2026-10-27T20:54:22Z"
+}
