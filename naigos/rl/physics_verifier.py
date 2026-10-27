@@ -123,6 +123,15 @@ def verify_physics_trace(
         elif expected_urban_digest and urban_grid.hashes.content_sha256 != expected_urban_digest:
             mismatches.append("urban artifact digest mismatch")
 
+    if cfg.mission.enabled:
+        agents = np.asarray(traj["pos"]).shape[1]
+        mission_stage = np.zeros(agents, dtype=np.int32)
+        mission_dwell = np.zeros(agents, dtype=np.float64)
+        mission_completed = np.zeros(agents, dtype=bool)
+        mission_recovered = np.zeros(agents, dtype=bool)
+        mission_failed = np.zeros(agents, dtype=bool)
+        mission_outcome = np.zeros(agents, dtype=np.uint8)
+
     for t in range(steps):
         pos = np.asarray(traj["pos"][t], dtype=np.float64)
         p0 = np.asarray(traj["pos_before"][t], dtype=np.float64)
@@ -229,24 +238,90 @@ def verify_physics_trace(
             if not np.array_equal(hit, np.asarray(traj["building_collision"][t], dtype=bool)):
                 mismatches.append(f"t={t}: swept building collision mismatch")
 
-        # Fixed-shape mission invariants and explicit deadline/outcome checks.
+        # Independent fixed-shape mission transition reconstruction.
         if cfg.mission.enabled:
             stage = np.asarray(traj["mission_stage"][t])
             before = np.asarray(traj["mission_stage_before_transition"][t])
+            dwell_before = np.asarray(traj["mission_dwell_before_transition"][t], dtype=np.float64)
             mask = np.asarray(traj["mission_stage_mask"][t])
-            if np.any(stage < before) or np.any(stage - before > 1):
-                mismatches.append(f"t={t}: mission stage progression is not ordered")
-            if np.any(stage >= mask.sum(axis=-1)):
-                mismatches.append(f"t={t}: mission stage indexes padding")
+            stage_pos = np.asarray(traj["mission_stage_pos"][t], dtype=np.float64)
+            if not np.array_equal(before, mission_stage):
+                mismatches.append(f"t={t}: mission stage-before state mismatch")
+            if np.max(np.abs(dwell_before - mission_dwell)) > tol:
+                mismatches.append(f"t={t}: mission dwell-before state mismatch")
+            count = mask.sum(axis=-1)
+            idx = np.clip(mission_stage, 0, mask.shape[-1] - 1)
+            target = stage_pos[np.arange(agents), idx]
+            inside = (
+                np.linalg.norm(pos[:, :2] - target[:, :2], axis=-1) <= cfg.mission.stage_radius_m
+            ) & (np.abs(pos[:, 2] - target[:, 2]) <= cfg.mission.stage_vertical_half_m)
+            active = ~mission_completed & ~mission_recovered & ~mission_failed
+            terms = traj["terms"]
+            loss = (
+                np.asarray(terms.shotdown[t], dtype=bool)
+                | np.asarray(terms.terrain_violation[t], dtype=bool)
+                | np.asarray(terms.building_collision[t], dtype=bool)
+                | np.asarray(terms.bounds_violation[t], dtype=bool)
+                | (np.asarray(terms.out_of_fuel[t], dtype=bool) if cfg.resource.enabled else False)
+            )
+            if cfg.mission.family == "recovery":
+                primary_now = np.zeros(agents, dtype=bool)
+                recovered_now = np.asarray(terms.diverted[t], dtype=bool) & active & ~loss
+                expected_stage = mission_stage
+                expected_dwell = mission_dwell
+            elif cfg.mission.family == "time_on_station":
+                expected_dwell = np.where(inside & active, mission_dwell + cfg.dt, 0.0)
+                primary_now = (expected_dwell >= cfg.mission.dwell_required_s) & active & ~loss
+                recovered_now = np.zeros(agents, dtype=bool)
+                expected_stage = mission_stage
+            else:
+                reached = inside & active & ~loss
+                last = mission_stage >= count - 1
+                primary_now = reached & last
+                recovered_now = np.zeros(agents, dtype=bool)
+                expected_stage = np.where(reached & ~last, mission_stage + 1, mission_stage)
+                expected_dwell = np.zeros(agents, dtype=np.float64)
+            completed_next = mission_completed | primary_now
+            recovered_next = mission_recovered | recovered_now
             deadline = np.asarray(traj["mission_deadline_step"][t])
-            failed = np.asarray(traj["mission_failed"][t], dtype=bool)
-            completed = np.asarray(traj["mission_completed"][t], dtype=bool)
-            recovered = np.asarray(traj["mission_recovered"][t], dtype=bool)
-            if np.any(completed & recovered):
-                mismatches.append(f"t={t}: primary completion and recovery both set")
-            expired = int(np.asarray(traj["step_index_before"][t])) + 1 >= deadline
-            if np.any(expired & ~completed & ~recovered & ~failed):
-                mismatches.append(f"t={t}: missed mission deadline without terminal state")
+            step_after = int(np.asarray(traj["step_index_before"][t])) + 1
+            timeout_now = (
+                (step_after >= deadline) & active & ~completed_next & ~recovered_next & ~loss
+            )
+            failed_next = mission_failed | loss | timeout_now
+            new_event = mission_outcome == 0
+            outcome_next = mission_outcome.copy()
+            outcome_next = np.where(new_event & timeout_now, 4, outcome_next)
+            outcome_next = np.where(new_event & loss, 3, outcome_next)
+            outcome_next = np.where(new_event & recovered_now, 2, outcome_next)
+            outcome_next = np.where(new_event & primary_now, 1, outcome_next).astype(np.uint8)
+            expected = {
+                "stage": expected_stage,
+                "dwell": expected_dwell,
+                "completed": completed_next,
+                "recovered": recovered_next,
+                "failed": failed_next,
+                "outcome": outcome_next,
+            }
+            actual = {
+                "stage": stage,
+                "dwell": np.asarray(traj["mission_dwell_s"][t]),
+                "completed": np.asarray(traj["mission_completed"][t], dtype=bool),
+                "recovered": np.asarray(traj["mission_recovered"][t], dtype=bool),
+                "failed": np.asarray(traj["mission_failed"][t], dtype=bool),
+                "outcome": np.asarray(traj["mission_outcome"][t], dtype=np.uint8),
+            }
+            for name in ("stage", "completed", "recovered", "failed", "outcome"):
+                if not np.array_equal(actual[name], expected[name]):
+                    mismatches.append(f"t={t}: mission {name} transition mismatch")
+            if np.max(np.abs(actual["dwell"] - expected["dwell"])) > tol:
+                mismatches.append(f"t={t}: mission dwell transition mismatch")
+            mission_stage = expected_stage.astype(np.int32)
+            mission_dwell = expected_dwell
+            mission_completed = completed_next
+            mission_recovered = recovered_next
+            mission_failed = failed_next
+            mission_outcome = outcome_next
 
     return PhysicsVerificationReport(
         steps=steps,

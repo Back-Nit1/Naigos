@@ -79,7 +79,10 @@ def test_weather_collision_mission_and_identity_tampering_are_rejected():
         ("ground_velocity", lambda a: a.__setitem__((0, 0, 1), a[0, 0, 1] + 3.0)),
         ("density_ratio", lambda a: a.__setitem__((0, 0), a[0, 0] * 0.8)),
         ("obstacle_clearance", lambda a: a.__setitem__((0, 0), a[0, 0] + 20.0)),
+        ("building_collision", lambda a: a.__setitem__((0, 0), ~a[0, 0])),
         ("mission_stage", lambda a: a.__setitem__((0, 0), 3)),
+        ("mission_dwell_s", lambda a: a.__setitem__((0, 0), a[0, 0] + 2.0)),
+        ("mission_outcome", lambda a: a.__setitem__((0, 0), 1)),
     )
     for name, edit in edits:
         bad = {k: copy.deepcopy(v) for k, v in trace.items()}
