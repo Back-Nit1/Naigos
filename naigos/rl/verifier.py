@@ -423,13 +423,11 @@ def verify_resource_trace(cfg: EnvConfig, traj: dict[str, Any], tol: float = 3e-
         if not np.array_equal(expected_divert, env_divert):
             mismatches.append(f"t={t}: diversion does not match first active-gate crossing")
 
+        # Independent copy of the documented precedence (env.resource.
+        # OUTCOME_PRECEDENCE): shot > terrain > bounds > fuel > primary > divert.
         new = np.zeros(agents, dtype=np.uint8)
-        new[arrived] = 1
-        new[expected_divert] = 2
-        new[shot] = 3
-        new[bounds] = 5
-        new[terrain] = 4
-        new[dry] = 6
+        for code, flag in ((2, expected_divert), (1, arrived), (6, dry), (5, bounds), (4, terrain), (3, shot)):
+            new[flag] = code
         timeout = (t + 1 >= cfg.max_steps) & ~was_terminal & (new == 0)
         new[timeout] = 7
         expected_outcome = np.where(expected_outcome == 0, new, expected_outcome)

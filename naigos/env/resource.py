@@ -187,15 +187,37 @@ def observation_features(cfg: EnvConfig, air: AircraftState, objective, rs: Reso
     return jnp.concatenate([resource, gate.reshape(cfg.n_blue, -1)], axis=-1)
 
 
+# Simultaneous events within one step resolve by this order, highest first.
+# Any loss beats any recovery (the env also refuses to grant arrival/diversion
+# on a loss step); among losses a hostile kill is attributed first, then the
+# physical terrain impact, then leaving the play box, then the fuel-exhaustion
+# crossing (the aircraft still glides on that step). Primary beats diversion.
+# Raw per-event flags stay in ``RewardTerms`` as evidence; metrics, the
+# verifier and replay summaries count the exclusive label.
+OUTCOME_PRECEDENCE = (
+    OUTCOME_SHOTDOWN,
+    OUTCOME_TERRAIN,
+    OUTCOME_BOUNDS,
+    OUTCOME_FUEL,
+    OUTCOME_PRIMARY,
+    OUTCOME_DIVERTED,
+    OUTCOME_TIMEOUT,
+)
+
+
 def outcome_update(previous, primary, diverted, shot, terrain, bounds, dry, timeout):
-    """Assign exactly one first terminal outcome, using physical-loss precedence."""
+    """Assign exactly one first terminal outcome following ``OUTCOME_PRECEDENCE``."""
+    events = {
+        OUTCOME_SHOTDOWN: shot,
+        OUTCOME_TERRAIN: terrain,
+        OUTCOME_BOUNDS: bounds,
+        OUTCOME_FUEL: dry,
+        OUTCOME_PRIMARY: primary,
+        OUTCOME_DIVERTED: diverted,
+        OUTCOME_TIMEOUT: timeout,
+    }
     new = jnp.zeros_like(previous)
-    new = jnp.where(primary, OUTCOME_PRIMARY, new)
-    new = jnp.where(diverted, OUTCOME_DIVERTED, new)
-    new = jnp.where(shot, OUTCOME_SHOTDOWN, new)
-    new = jnp.where(bounds, OUTCOME_BOUNDS, new)
-    new = jnp.where(terrain, OUTCOME_TERRAIN, new)
-    new = jnp.where(dry, OUTCOME_FUEL, new)
-    new = jnp.where(timeout & (new == 0), OUTCOME_TIMEOUT, new)
+    for code in reversed(OUTCOME_PRECEDENCE):  # lowest priority first, so higher overwrites
+        new = jnp.where(events[code], code, new)
     return jnp.where(previous == OUTCOME_ONGOING, new, previous).astype(jnp.uint8)
 
