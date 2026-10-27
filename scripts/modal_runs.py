@@ -39,8 +39,11 @@ it reaches a terminal.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
+import hashlib
 import json
+import secrets
 import shutil
 import subprocess
 import sys
@@ -69,6 +72,7 @@ REPO = Path(__file__).resolve().parents[1]
 #: is `manifest.json` on the Volume, which is why `status` works from a fresh
 #: clone that has never submitted anything.
 JOBS_DIR = REPO / "runs" / ".jobs"
+SUBMISSION_CLAIMS_DICT = "naigos-run-submission-claims"
 
 
 # --- modal plumbing ----------------------------------------------------------
@@ -191,6 +195,51 @@ def _put_volume_json(remote_path: str, payload: dict) -> None:
             batch.put_file(str(local), remote_path)
 
 
+def _claim_submission(run_name: str, meta: dict) -> dict:
+    """Atomically claim one new run name before any billable spawn.
+
+    Modal Dict ``put(..., skip_if_exists=True)`` is the cloud-side compare-and-
+    set primitive. Claims deliberately survive client errors and successful
+    starts: absence of a response from ``spawn`` is not evidence that Modal did
+    not accept the call, so automatically releasing would reopen the duplicate
+    billing race.
+    """
+    modal = _require_modal()
+    identity_blob = json.dumps(
+        runmeta.identity(meta), sort_keys=True, separators=(",", ":"), default=str
+    ).encode()
+    claim = {
+        "schema": "naigos-run-submission-claim/1",
+        "run_name": run_name,
+        "identity_sha256": hashlib.sha256(identity_blob).hexdigest(),
+        "claimed_utc": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "nonce": secrets.token_hex(16),
+    }
+    claims = modal.Dict.from_name(SUBMISSION_CLAIMS_DICT, create_if_missing=True)
+    try:
+        acquired = claims.put(run_name, claim, skip_if_exists=True)
+    except (AttributeError, TypeError) as exc:
+        raise SystemExit(
+            "the installed Modal client does not expose atomic Dict.put(..., "
+            "skip_if_exists=True); refusing to spawn without a cloud-side claim"
+        ) from exc
+    if not acquired:
+        detail = ""
+        with contextlib.suppress(Exception):
+            existing = claims.get(run_name)
+            detail = (
+                f" (claimed {existing.get('claimed_utc')}, identity "
+                f"{existing.get('identity_sha256')})"
+                if isinstance(existing, dict) else ""
+            )
+        raise SystemExit(
+            f"{run_name} already has an atomic cloud submission claim{detail}. "
+            "Do not retry it automatically: inspect Modal and the run manifest, "
+            "because a lost spawn response may still represent a billable job."
+        )
+    return claim
+
+
 # --- local job index ---------------------------------------------------------
 
 
@@ -299,12 +348,12 @@ def _relaunch_from(existing_meta: dict, run_name: str) -> tuple:
     return prof, code, meta
 
 
-def _check_not_live(run_name: str) -> None:
-    """Refuse a second job for a run that already has one in flight.
+def _check_not_live(run_name: str, *, allow_terminal: bool = False) -> None:
+    """Refuse a duplicate start, or a second writer for a resume.
 
-    This is the check that actually prevents two writers in one run directory;
-    the lock file inside the directory is the backstop for the case where this
-    one could not see the truth (a Volume commit that has not propagated).
+    New submissions require an unused run name even when an old manifest is
+    terminal. This remains a permanent backstop after an atomic Modal Dict claim
+    expires. Resume explicitly allows a terminal manifest, but never a live one.
     """
     manifest = _read_volume_json(f"{run_name}/{runmeta.MANIFEST_FILENAME}")
     if manifest is None:
@@ -317,6 +366,12 @@ def _check_not_live(run_name: str) -> None:
             f"checkpoints and overwrite each other's history.json. Submit under a different "
             f"--run-name, or cancel that job first:\n"
             f"  uv run python scripts/modal_runs.py cancel {run_name}"
+        )
+    if not allow_terminal:
+        raise SystemExit(
+            f"{run_name} already has a recorded {verdict['status']} submission. "
+            "A run name is single-use; resume that run after inspection or submit "
+            "a new immutable run name."
         )
 
 
@@ -398,6 +453,7 @@ def submit_prepared(
         print("[gate] working tree is dirty; this run will not be reproducible from its commit")
 
     _check_not_live(name)
+    _claim_submission(name, meta)
     return _spawn(prof, name, meta, spec, gpu=gpu)
 
 
@@ -491,7 +547,7 @@ def cmd_resume(a) -> int:
     for note in compat["overridden"]:
         print(f"[resume] OVERRIDDEN: {note}")
 
-    _check_not_live(name)
+    _check_not_live(name, allow_terminal=True)
     rcfg = requested_meta["config"]
     spec = {
         "profile": prof.as_dict(),

@@ -124,6 +124,17 @@ those unresolved cells and submits only cells that are still `pending`. It does
 not assert that the failed cell is safe to retry and does not erase its error or
 attempt timestamps from the receipt.
 
+Immediately before each new spawn, the launcher also atomically inserts the run
+name into the persistent `naigos-run-submission-claims` Modal Dict using
+`put(..., skip_if_exists=True)`. Concurrent launchers therefore cannot both
+cross the check-and-spawn boundary. Claims are intentionally not released after
+a spawn exception: a lost response may still correspond to a queued, billable
+job. If a claim is unresolved, inspect Modal plus the Volume manifest and use a
+new run identity; automatic claim deletion/retry is deliberately unsupported.
+Even after the Dict service expires an inactive claim, an existing Volume
+manifest makes the run name permanently single-use for a new submission;
+terminal runs can only enter the explicit resume path.
+
 Run names and identities are deterministic. Changing any axis, resolved
 profile, code state, policy contract, theatre policy basis, dataset digest, or
 scenario digest creates a different identity. Duplicate inputs and duplicate

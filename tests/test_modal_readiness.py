@@ -145,6 +145,51 @@ def test_spawn_does_not_overwrite_a_worker_that_started_before_spawn_returned(mo
     assert records[0][1]["job_id"] == "fc-new"
 
 
+def test_atomic_cloud_claim_allows_only_one_spawn_for_a_run(monkeypatch):
+    mr = _load_script("modal_runs")
+    stored = {}
+
+    class DictHandle:
+        def put(self, key, value, *, skip_if_exists=False):
+            if skip_if_exists and key in stored:
+                return False
+            stored[key] = value
+            return True
+
+        def get(self, key):
+            return stored.get(key)
+
+    class DictType:
+        @staticmethod
+        def from_name(_name, *, create_if_missing):
+            assert create_if_missing
+            return DictHandle()
+
+    fake_modal = type("Modal", (), {"Dict": DictType})
+    monkeypatch.setattr(mr, "_require_modal", lambda: fake_modal)
+    meta = {"run_name": "one-run", "profile": "smoke", "config": {}, "code": {}}
+
+    claim = mr._claim_submission("one-run", meta)
+    assert stored["one-run"] == claim
+    with pytest.raises(SystemExit, match="already has an atomic cloud submission claim"):
+        mr._claim_submission("one-run", meta)
+
+
+def test_new_submission_names_are_single_use_after_claim_expiry(monkeypatch):
+    mr = _load_script("modal_runs")
+    manifest = rm.build_manifest(
+        run_name="used-run", job_id="fc-old", profile="smoke", gpu="A10G",
+        timeout_s=1800, max_retries=0, checkpoint_every=3, code={}, config={},
+        status=rm.COMPLETED,
+    )
+    monkeypatch.setattr(mr, "_read_volume_json", lambda _path: manifest)
+    monkeypatch.setattr(mr, "_remote_state", lambda _job_id: rm.COMPLETED)
+
+    with pytest.raises(SystemExit, match="run name is single-use"):
+        mr._check_not_live("used-run")
+    mr._check_not_live("used-run", allow_terminal=True)
+
+
 # --- smoke gate: the worker verifies its own run before it can mark itself completed ---------
 
 

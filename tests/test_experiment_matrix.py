@@ -316,6 +316,7 @@ def test_prepared_submit_uses_verified_smoke_and_writer_gates(monkeypatch):
     }
     checks, spawns = [], []
     monkeypatch.setattr(mr, "_check_not_live", lambda name: checks.append(name))
+    monkeypatch.setattr(mr, "_claim_submission", lambda name, meta: {"run_name": name})
     monkeypatch.setattr(mr, "_spawn", lambda *a, **k: spawns.append((a, k)) or "fc-1")
     monkeypatch.setattr(mr, "_read_volume_json", lambda _path: None)
     with pytest.raises(SystemExit, match="no smoke run"):
