@@ -11,7 +11,7 @@ Raw bytes live in `data_cache/` (gitignored, regenerable); `data_cache/manifest.
 | --- | --- | --- |
 | USGS 3D Elevation Program (3DEP) | Public domain (US Government work, USGS) | Terrain elevation grid for radar line-of-sight masking and terrain-following routes. |
 | Copernicus DEM GLO-30 | Copernicus DEM free/open licence (ESA/Airbus), attribution required | Global DEM fallback where 3DEP has no coverage. |
-| USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data) | Public domain (US Government work, USGS) | Structure heights for the physics-grade urban obstacle artifact: ASPRS class-6 (building) returns over bare-earth class-2 returns. Physics evidence, unlike OSM. |
+| USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data) | Public domain (US Government work, USGS) | Structure heights for the physics-grade urban obstacle artifact: the provider's building and bridge-deck returns (or, where it classified no buildings, unclassified surface returns) over its bare-earth returns. Physics evidence, unlike OSM. |
 | NYC Building Footprints (NYC Open Data, DoITT/OTI) | NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source) | Authoritative footprints and roof heights for nyc_harbor's urban physics box, reconciled with USGS 3DEP lidar. Dated source: the model is a capture-date snapshot, never a statement about current conditions. |
 | OurAirports | Public domain (dedicated to the public domain by OurAirports) | Airfield and runway geometry -> sortie start points, objectives, no-fly structure. |
 | OpenSky Network REST API | Free for non-commercial / research use under the OpenSky Network terms | Real civil aircraft kinematics -> calibrate airframe speed/climb/turn-rate envelopes. |
@@ -253,6 +253,33 @@ Each class declares a notional role-based design range; the range equation solve
 | short_range_point_defense | 30 km | 30 km | 19 km | 16 km | 5 s |
 | mobile_short_range | 15 km | 15 km | 9 km | 8 km | 6 s |
 | interceptor_seeker | 8 km | 8 km | 5 km | 2 km | 2 s |
+## Physics-grade urban obstacles
+
+Contract: [`docs/contracts/urban-obstacles-v1.md`](../../contracts/urban-obstacles-v1.md). This is the only urban geometry the simulation may collide with; the OpenStreetMap city layer below it in the viewer is presentation only and is never this.
+
+* physics box: -118.28..-118.215 E, 34.025..34.075 N (a sub-box of the AOI); grid 592 x 546 at 10 m, EPSG:32611; coverage 100.0%; 260,963 obstacle cells; tallest cell 310.2 m
+* schema `naigos.urban_obstacles` v1; content `0d052816073d4866a2f0109f1e07522576be5ef43374a1ccb3d21c066cb758ff`
+* metadata `095052b77f820d76f16d4b0e250d387b2c1b4568f539a6b8b651d1ca7e0d0b9d`
+* payload `4b9a615b4532f2f7e557a93da462e4b92c171788e2c3ae3052fb6286f1183074`
+* built from commit `923a081351bd0b7b8a8d288e03199e66af36dc32` (dirty tree: True) at 2026-10-27T21:09:07Z
+* cache: `data_cache/urban_physics/los_angeles_basin/0d052816073d4866/` (gitignored; a copy is committed under `tests/fixtures/urban_physics_root/`)
+
+| source | product | licence | captured | published | retrieved | input sha256 |
+| --- | --- | --- | --- | --- | --- | --- |
+| USGS 3DEP bare-earth DEM | 3DEP best-available, 10 m | Public domain (US Government work, USGS) | varies by source tile (3DEP seamless mosaic) | unknown (service mosaic) | 2026-10-27T20:54:44Z | `4a62f64a51213f9e` |
+| USGS 3DEP lidar point cloud (EPT) | CA_LosAngeles_1_B23; classes [1, 17]; no TNM tile listing used | Public domain (US Government work, USGS) | 2023-09-25 .. 2024-01-08 | EPT copy built 2025-11-21 (collection CA_LosAngeles_1_B23; publisher release date not listed by TNM) | 2026-10-27T21:01:55Z | `365d231815c54fb2` |
+
+Cross-checks and counts:
+
+* lidar_ground_minus_dem_median_m: -0.035
+* lidar_points_kept: 35134393
+* lidar_nodes: 1298
+* lidar_spike_cells_repaired: 0
+* building_height_m_p50_p90_p99_max: [9.7, 23.8, 79.0, 310.2]
+* exclusion_cells: {}
+
+>  The provider classified no buildings in this collection (only unclassified, ground, noise, bridge), so the obstacle mask is every non-ground surface return >= 3 m above local ground: buildings AND tree canopy, vehicles-on-structures and other surface objects. It is an obstacle surface, not a building inventory. max-per-cell structure top over a 10 m cell (conservative: any structure in the cell blocks it); lidar nominal spacing at EPT depth 10; structure heights are lower bounds for spires and masts; isolated spikes >60 m and 3x above all neighbours are repaired as classification noise; classification is the provider's
+
 
 ## Scope guardrail
 

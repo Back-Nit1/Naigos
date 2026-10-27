@@ -15,10 +15,10 @@
   "parameters": {
     "schema": "naigos.urban_obstacles",
     "schema_version": 1,
-    "content_sha256": "983838d2b68e51174b98b88663da622feef745ed09addb8b7761f2883909d7fe",
-    "metadata_sha256": "76559a47168f76c880b2cf2cedb1bd65b9c52c1f5283780724deb56b65cbea0e",
-    "payload_sha256": "4f9efffe34d15528edc07d41c9629a77161fa91a818a7dfd72b4975bf88ef56b",
-    "artifact_dir": "urban_physics/nyc_harbor/983838d2b68e5117",
+    "content_sha256": "c68d8582bf27f84f7d9353285285d300a58309566e395ebc9e7f07bd52fe446b",
+    "metadata_sha256": "cf7988993845a60a4f2b2be8af32cc2ee5cf712c6f7bc72e3c24eea9effd60c9",
+    "payload_sha256": "99b73b5a8c4b76a8f14b6fe6f5cc9b8997e38fc2bc20f79361124b1f9522672f",
+    "artifact_dir": "urban_physics/nyc_harbor/c68d8582bf27f84f",
     "cell_m": 10.0,
     "nx": 500,
     "ny": 493,
@@ -52,16 +52,16 @@
     "footprint_vs_lidar_height_median_abs_diff_m": 2.83,
     "schema": "naigos.urban_obstacles",
     "schema_version": 1,
-    "content_sha256": "983838d2b68e51174b98b88663da622feef745ed09addb8b7761f2883909d7fe",
-    "metadata_sha256": "76559a47168f76c880b2cf2cedb1bd65b9c52c1f5283780724deb56b65cbea0e",
-    "payload_sha256": "4f9efffe34d15528edc07d41c9629a77161fa91a818a7dfd72b4975bf88ef56b",
+    "content_sha256": "c68d8582bf27f84f7d9353285285d300a58309566e395ebc9e7f07bd52fe446b",
+    "metadata_sha256": "cf7988993845a60a4f2b2be8af32cc2ee5cf712c6f7bc72e3c24eea9effd60c9",
+    "payload_sha256": "99b73b5a8c4b76a8f14b6fe6f5cc9b8997e38fc2bc20f79361124b1f9522672f",
     "aoi": "nyc_harbor",
     "aoi_fingerprint": "997eeb1b1c",
     "cell_m": 10.0,
     "nx": 500,
     "ny": 493,
-    "coverage_fraction": 0.976316,
-    "building_cells": 130121,
+    "coverage_fraction": 0.999939,
+    "building_cells": 131579,
     "max_height_agl_m": 547.8720092773438,
     "sources": [
       {
@@ -86,9 +86,16 @@
         "published": "2026-10-25"
       }
     ],
-    "code_commit": "11af9d1ca6b2bf226decf7df828d7be9a2d47b81",
-    "dirty": true,
-    "excluded_cells": 5823
+    "code_commit": "923a081351bd0b7b8a8d288e03199e66af36dc32",
+    "dirty": false,
+    "building_height_m_p50_p90_p99_max": [
+      20.1,
+      55.6,
+      155.9,
+      547.9
+    ],
+    "exclusion_cells": {},
+    "excluded_cells": 0
   },
   "invariants": [
     "Loaded only through naigos.data.urban_obstacles.load_urban_obstacles with an ExpectedFrame.",
@@ -144,27 +151,27 @@
   ],
   "cached_artifacts": [
     {
-      "key": "urban_physics/nyc_harbor/983838d2b68e5117/payload.bin",
-      "path": "urban_physics/nyc_harbor/983838d2b68e5117/payload.bin",
+      "key": "urban_physics/nyc_harbor/c68d8582bf27f84f/payload.bin",
+      "path": "urban_physics/nyc_harbor/c68d8582bf27f84f/payload.bin",
       "bytes": 4437000,
-      "sha256": "4f9efffe34d15528edc07d41c9629a77161fa91a818a7dfd72b4975bf88ef56b",
-      "fetched_at": "2026-10-27T20:59:45Z",
+      "sha256": "99b73b5a8c4b76a8f14b6fe6f5cc9b8997e38fc2bc20f79361124b1f9522672f",
+      "fetched_at": "2026-10-27T21:09:05Z",
       "url": "derived"
     },
     {
-      "key": "urban_physics/nyc_harbor/983838d2b68e5117/metadata.json",
-      "path": "urban_physics/nyc_harbor/983838d2b68e5117/metadata.json",
-      "bytes": 4737,
-      "sha256": "76559a47168f76c880b2cf2cedb1bd65b9c52c1f5283780724deb56b65cbea0e",
-      "fetched_at": "2026-10-27T20:59:45Z",
+      "key": "urban_physics/nyc_harbor/c68d8582bf27f84f/metadata.json",
+      "path": "urban_physics/nyc_harbor/c68d8582bf27f84f/metadata.json",
+      "bytes": 4632,
+      "sha256": "cf7988993845a60a4f2b2be8af32cc2ee5cf712c6f7bc72e3c24eea9effd60c9",
+      "fetched_at": "2026-10-27T21:09:05Z",
       "url": "derived"
     },
     {
-      "key": "urban_physics/nyc_harbor/983838d2b68e5117/descriptor.json",
-      "path": "urban_physics/nyc_harbor/983838d2b68e5117/descriptor.json",
+      "key": "urban_physics/nyc_harbor/c68d8582bf27f84f/descriptor.json",
+      "path": "urban_physics/nyc_harbor/c68d8582bf27f84f/descriptor.json",
       "bytes": 360,
-      "sha256": "258556e9c5a09482ac23efe703936eaed40383373c8894662af1e3af157e5942",
-      "fetched_at": "2026-10-27T20:59:45Z",
+      "sha256": "e138e85d9c729969cd7743ccc2ee4e9da8263a56242f7ebe612326cef0c1844f",
+      "fetched_at": "2026-10-27T21:09:05Z",
       "url": "derived"
     },
     {
@@ -192,5 +199,5 @@
       "url": "https://data.cityofnewyork.us/resource/5zhs-2jue.json?$select=the_geom,height_roof,ground_elevation,last_edited_date,last_status_type,geom_source&$where=within_box(the_geom,40.69457453835943,-74.02588828636205,40.74046509852127,-73.96402959354405)&$limit=200000"
     }
   ],
-  "generated_at": "2026-10-27T20:59:45Z"
+  "generated_at": "2026-10-27T21:09:05Z"
 }

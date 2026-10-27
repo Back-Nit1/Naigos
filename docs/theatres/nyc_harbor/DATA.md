@@ -11,7 +11,7 @@ Raw bytes live in `data_cache/` (gitignored, regenerable); `data_cache/manifest.
 | --- | --- | --- |
 | USGS 3D Elevation Program (3DEP) | Public domain (US Government work, USGS) | Terrain elevation grid for radar line-of-sight masking and terrain-following routes. |
 | Copernicus DEM GLO-30 | Copernicus DEM free/open licence (ESA/Airbus), attribution required | Global DEM fallback where 3DEP has no coverage. |
-| USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data) | Public domain (US Government work, USGS) | Structure heights for the physics-grade urban obstacle artifact: ASPRS class-6 (building) returns over bare-earth class-2 returns. Physics evidence, unlike OSM. |
+| USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data) | Public domain (US Government work, USGS) | Structure heights for the physics-grade urban obstacle artifact: the provider's building and bridge-deck returns (or, where it classified no buildings, unclassified surface returns) over its bare-earth returns. Physics evidence, unlike OSM. |
 | NYC Building Footprints (NYC Open Data, DoITT/OTI) | NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source) | Authoritative footprints and roof heights for nyc_harbor's urban physics box, reconciled with USGS 3DEP lidar. Dated source: the model is a capture-date snapshot, never a statement about current conditions. |
 | OurAirports | Public domain (dedicated to the public domain by OurAirports) | Airfield and runway geometry -> sortie start points, objectives, no-fly structure. |
 | OpenSky Network REST API | Free for non-commercial / research use under the OpenSky Network terms | Real civil aircraft kinematics -> calibrate airframe speed/climb/turn-rate envelopes. |
@@ -203,6 +203,7 @@ The optional `--visual urban-presentation` mode draws OpenStreetMap building foo
 | `urban_ground/nyc_harbor/997eeb1b1c/10m` | `urban_src/nyc_harbor_997eeb1b1c_ground_10m_utm.tif` | 1.2 MB | `69c933873a5f` | 2026-10-27T20:51:40Z |
 | `urban_lidar_products/los_angeles_basin/89ce98e489` | `urban_src/los_angeles_basin_89ce98e489_tnm_products.json` | 0.3 MB | `5fd3967a9921` | 2026-10-27T20:57:22Z |
 | `urban_lidar_products/nyc_harbor/997eeb1b1c` | `urban_src/nyc_harbor_997eeb1b1c_tnm_products.json` | 0.1 MB | `beecb3a070d8` | 2026-10-27T20:52:47Z |
+| `urban_lidar_rasters/los_angeles_basin/89ce98e489/10m` | `urban_src/los_angeles_basin_89ce98e489_lidar_cells.npz` | 10.5 MB | `365d231815c5` | 2026-10-27T21:01:55Z |
 | `urban_lidar_rasters/nyc_harbor/997eeb1b1c/10m` | `urban_src/nyc_harbor_997eeb1b1c_lidar_cells.npz` | 7.9 MB | `cc6d3642d2a1` | 2026-10-27T20:59:44Z |
 
 ## What the data established
@@ -252,6 +253,40 @@ Each class declares a notional role-based design range; the range equation solve
 | short_range_point_defense | 30 km | 30 km | 19 km | 16 km | 5 s |
 | mobile_short_range | 15 km | 15 km | 9 km | 8 km | 6 s |
 | interceptor_seeker | 8 km | 8 km | 5 km | 2 km | 2 s |
+## Physics-grade urban obstacles
+
+Contract: [`docs/contracts/urban-obstacles-v1.md`](../../contracts/urban-obstacles-v1.md). This is the only urban geometry the simulation may collide with; the OpenStreetMap city layer below it in the viewer is presentation only and is never this.
+
+* physics box: -74.025..-73.965 E, 40.695..40.74 N (a sub-box of the AOI); grid 500 x 493 at 10 m, EPSG:32618; coverage 100.0%; 131,579 obstacle cells; tallest cell 547.9 m
+* schema `naigos.urban_obstacles` v1; content `c68d8582bf27f84f7d9353285285d300a58309566e395ebc9e7f07bd52fe446b`
+* metadata `cf7988993845a60a4f2b2be8af32cc2ee5cf712c6f7bc72e3c24eea9effd60c9`
+* payload `99b73b5a8c4b76a8f14b6fe6f5cc9b8997e38fc2bc20f79361124b1f9522672f`
+* built from commit `923a081351bd0b7b8a8d288e03199e66af36dc32` (dirty tree: False) at 2026-10-27T21:09:05Z
+* cache: `data_cache/urban_physics/nyc_harbor/c68d8582bf27f84f/` (gitignored; a copy is committed under `tests/fixtures/urban_physics_root/`)
+
+| source | product | licence | captured | published | retrieved | input sha256 |
+| --- | --- | --- | --- | --- | --- | --- |
+| USGS 3DEP bare-earth DEM | 3DEP best-available, 10 m | Public domain (US Government work, USGS) | varies by source tile (3DEP seamless mosaic) | unknown (service mosaic) | 2026-10-27T20:51:40Z | `69c933873a5fc7d9` |
+| USGS 3DEP lidar point cloud (EPT) | NY_NewYorkCity; classes [6, 17]; 16 TNM tiles of NY_New_York_CMGP_SANDY_LiDAR_15 | Public domain (US Government work, USGS) | 2013-08-05 .. 2014-04-21 | 2015-04-14 | 2026-10-27T20:59:44Z | `cc6d3642d2a1b45e` |
+| NYC Building Footprints | NYC Open Data 5zhs-2jue | NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source) | feature last-edited 2006-09-25 .. 2026-10-15 (heights from city lidar/photogrammetry) | 2026-10-25 | 2026-10-27T20:52:45Z | `be97d008c8a9d14c` |
+
+Cross-checks and counts:
+
+* lidar_ground_minus_dem_median_m: -0.033
+* lidar_points_kept: 12602568
+* lidar_nodes: 295
+* lidar_spike_cells_repaired: 17
+* footprint_records: 15166
+* cells_footprint_only: 19016
+* cells_lidar_only: 40655
+* cells_both: 71987
+* footprint_vs_lidar_height_median_diff_m: -0.63
+* footprint_vs_lidar_height_median_abs_diff_m: 2.83
+* building_height_m_p50_p90_p99_max: [20.1, 55.6, 155.9, 547.9]
+* exclusion_cells: {}
+
+> max-per-cell structure top over a 10 m cell (conservative: any structure in the cell blocks it); lidar nominal spacing at EPT depth 7; structure heights are lower bounds for spires and masts; isolated spikes >60 m and 3x above all neighbours are repaired as classification noise; classification is the provider's
+
 
 ## Scope guardrail
 
