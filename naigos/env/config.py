@@ -251,6 +251,7 @@ class ResourceWorldConfig:
     burn_multiplier: tuple[float, float] = (0.85, 1.15)
     gate_lateral_frac: float = 0.25
     gate_arrival_radius: float = 2_000.0
+    active_gate_mask: tuple[bool, bool] = (True, True)
 
     @property
     def enabled(self) -> bool:
@@ -280,6 +281,8 @@ def resource_world_problems(cfg: ResourceWorldConfig) -> list[str]:
         problems.append("resource.gate_lateral_frac must be in [0, 0.5)")
     if cfg.gate_arrival_radius <= 0:
         problems.append("resource.gate_arrival_radius must be positive")
+    if len(cfg.active_gate_mask) != N_DIVERSION_GATES or not any(cfg.active_gate_mask):
+        problems.append(f"resource.active_gate_mask must enable at least one of {N_DIVERSION_GATES} gates")
     return problems
 
 

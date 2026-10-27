@@ -313,6 +313,37 @@ def avoid_nap_policy(obs, k):
     ], -1)
 
 
+def make_reserve_divert_policy(cfg: EnvConfig):
+    """Observation-only L1 baseline: primary if feasible, best gate otherwise.
+
+    The controller deliberately receives no ``EnvState``. It reads the primary
+    heading and the resource margins/body-frame gate vectors already present in
+    ``ResourceObservation-v1`` and still emits the same three flight controls.
+    """
+    if not cfg.resource.enabled:
+        raise ValueError("reserve-divert requires resource-world-v1/endurance")
+    base = 14 if cfg.obs_edge_features else 10
+
+    def reserve_divert(obs, key):
+        del key
+        resource = obs.ego[:, base:]
+        primary_margin = resource[:, 3]
+        gates = resource[:, 6:].reshape(cfg.n_blue, 2, 7)
+        margins = jnp.where(gates[..., 6] > 0.5, gates[..., 5], -jnp.inf)
+        best = jnp.argmax(margins, axis=-1)
+        row = jnp.arange(cfg.n_blue)
+        gate_error = jnp.arctan2(gates[row, best, 1], gates[row, best, 0])
+        primary_error = jnp.arctan2(obs.ego[:, 4], obs.ego[:, 5])
+        heading_error = jnp.where(primary_margin >= 0.0, primary_error, gate_error)
+        return jnp.stack([
+            jnp.clip(2.0 * heading_error, -1.0, 1.0),
+            jnp.zeros_like(heading_error),
+            jnp.full_like(heading_error, 0.6),
+        ], axis=-1)
+
+    return reserve_divert
+
+
 BASELINE_POLICIES = {"direct": direct_route_policy, "avoid_nap": avoid_nap_policy}
 
 

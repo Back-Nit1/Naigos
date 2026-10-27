@@ -101,7 +101,10 @@ def initial_state(cfg: EnvConfig, episode_key, hmap, start, objective, bounds) -
             reserve_fuel=direct_fuel * reserve_ratio,
             burn_multiplier=burn_multiplier,
             diversion_pos=_gates(cfg, hmap, start, objective, bounds),
-            diversion_active=jnp.ones((B, N_DIVERSION_GATES), dtype=bool),
+            diversion_active=jnp.broadcast_to(
+                jnp.asarray(cfg.resource.active_gate_mask, dtype=bool),
+                (B, N_DIVERSION_GATES),
+            ),
             diverted=jnp.zeros((B,), dtype=bool),
             outcome=jnp.zeros((B,), dtype=jnp.uint8),
         )
