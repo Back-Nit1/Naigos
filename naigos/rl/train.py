@@ -701,7 +701,7 @@ def evaluate_route_bank(
     if use_cbf:
         from .cbf import CBFConfig, make_policy_filter
 
-        afilter = make_policy_filter(CBFConfig(), env.cfg)
+        afilter = make_policy_filter(CBFConfig(), env.cfg, urban_surface=env.urban_surface)
     keys, routes = _route_bank_inputs(rows)
     record = trec.is_recording(recording)
     if record and record_policy is None:
@@ -801,7 +801,11 @@ def evaluate_resource_bank(
         finals, trajs, by_combination = [], [], {}
         for row in resource_bank(split):
             cfg = config_for_scenario(env.cfg, row)
-            sub = NaigosEnv(cfg, hmap=hmap, red_policy=env.red_policy)
+            sub = NaigosEnv(
+                cfg, hmap=hmap, red_policy=env.red_policy,
+                urban_obstacles=env.urban_obstacles,
+                env_origin_utm_m=env.env_origin_utm_m,
+            )
             result["problems"] += provenance_problems(cfg, row, base_digest, hmap)
             key = jax.random.PRNGKey(row.seed)
             route = jnp.array([np.deg2rad(row.bearing_deg), row.family_id], dtype=jnp.float32)
@@ -856,6 +860,8 @@ def run(
     resume_from: str | Path | None = None,
     on_progress: Callable[[dict], None] | None = None,
     red_curriculum: RedCurriculum | None = None,
+    urban_obstacles=None,
+    env_origin_utm_m=None,
 ):
     """Train (see `_run`), optionally recording the PPO collector's rollouts.
 
@@ -868,6 +874,7 @@ def run(
     try:
         result = _run(
             env_cfg, ppo_cfg, train_cfg, hmap, meta, on_persist, resume_from, on_progress, red_curriculum,
+            urban_obstacles, env_origin_utm_m,
             _recorders=recorders,
         )
     except BaseException:
@@ -889,6 +896,8 @@ def _run(
     resume_from: str | Path | None = None,
     on_progress: Callable[[dict], None] | None = None,
     red_curriculum: RedCurriculum | None = None,
+    urban_obstacles=None,
+    env_origin_utm_m=None,
     _recorders: list | None = None,
 ):
     """Train, and record what it cost.
@@ -930,6 +939,11 @@ def _run(
         family=ppo_cfg.policy_family,
         version=ppo_cfg.policy_version,
     )
+    urban_digest = None
+    if env_cfg.urban.enabled:
+        if urban_obstacles is None:
+            raise ValueError("urban training requires the explicitly validated obstacle artifact")
+        urban_digest = urban_obstacles.hashes.content_sha256
     plateau = train_cfg.plateau
     if plateau is not None and plateau.min_evaluations < 1:
         raise CurriculumError(f"plateau.min_evaluations must be at least 1, got {plateau.min_evaluations}")
@@ -975,6 +989,20 @@ def _run(
                 resource_config=dataclasses.asdict(env_cfg.resource),
                 resource_bank=resource_protocol(base_config_digest(env_cfg, hmap)),
             )
+        if env_cfg.weather.enabled or env_cfg.mission.enabled or env_cfg.urban.enabled:
+            identity = ckpt.environment_identity_record(
+                env_cfg,
+                urban_obstacle_digest=urban_digest,
+                code_commit=((meta.get("code") or {}).get("commit")),
+                code_dirty=((meta.get("code") or {}).get("dirty")),
+            )
+            identity["policy_family"] = f"{policy_spec.family.value}@{policy_spec.version}"
+            meta_config.update(
+                environment_model_id=env_cfg.environment_model_id,
+                observation_schema_id=ckpt.observation_schema_for_cfg(env_cfg),
+                actor_schema_id=ckpt.actor_schema_for_cfg(env_cfg),
+                environment_identity=identity,
+            )
         meta = {
             **meta,
             "config": meta_config,
@@ -994,6 +1022,7 @@ def _run(
         "policy_version": policy_spec.version,
         "policy_parameter_count": policy_spec.parameter_count,
         "policy_spec_sha256": policy_spec.sha256,
+        "environment_model_id": env_cfg.environment_model_id,
         "env_steps_per_iteration": steps_per_iter,
         "agent_steps_per_iteration": steps_per_iter * env_cfg.n_blue,
     }
@@ -1047,7 +1076,10 @@ def _run(
 
     blob = ckpt.load(resume_from) if resume_from is not None else None
     if blob is not None:
-        ckpt.require_resume_compatible(blob, env_cfg, ppo_cfg, policy_spec, resume_from)
+        ckpt.require_resume_compatible(
+            blob, env_cfg, ppo_cfg, policy_spec, resume_from,
+            urban_obstacle_digest=urban_digest,
+        )
         rec = blob["recovery"]
         # Restore the curriculum state BEFORE building the env, because the env
         # is a function of the red level and the reward weights are a function
@@ -1061,7 +1093,10 @@ def _run(
         wall_offset = float(rec.get("wall_s") or 0.0)
 
     cfg = red_cur.apply(env_cfg, level)
-    env = NaigosEnv(cfg, hmap=hmap)
+    env = NaigosEnv(
+        cfg, hmap=hmap, urban_obstacles=urban_obstacles,
+        env_origin_utm_m=env_origin_utm_m,
+    )
     weights, sw, ew = rew_cur.weights_for(base_w, shootdown_rate)
 
     # `k_init` is derived from the seed the same way on a fresh run and on a
@@ -1424,6 +1459,8 @@ def _run(
                 run_name=(meta or {}).get("run_name"),
                 code_commit=((meta or {}).get("code") or {}).get("commit"),
                 resumed_from=resume_info.get("resume_chain"),
+                urban_obstacle_digest=urban_digest,
+                code_dirty=((meta or {}).get("code") or {}).get("dirty"),
             )
             persist({"last_iteration": it, "iterations_declared": train_cfg.iterations,
                      "event": "checkpoint"})

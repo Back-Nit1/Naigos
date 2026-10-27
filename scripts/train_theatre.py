@@ -14,10 +14,15 @@ local run and a Modal run are verified by the same command:
 """
 import argparse
 import json
+import sys
 from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO))
 
 from naigos.env.config import EnvConfig
 from naigos.env.theatre_bridge import describe, env_from_theatre
+from naigos.env.scenario_bank import config_for_scenario, scenario_bank
 from naigos.rl import runmeta
 from naigos.rl.ppo import PPOConfig
 from naigos.rl.red_team import RedCurriculum
@@ -82,6 +87,10 @@ if __name__ == "__main__":
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cbf", action="store_true", help="run the HOCBF-QP backstop during evaluation")
     ap.add_argument("--aoi", default=None, help="theatre to train on (default: the packaged one)")
+    ap.add_argument(
+        "--city-scenario", default=None, metavar="CASE",
+        help="opt into one frozen NYC/LA weather+mission scenario-bank case; never fetches live weather",
+    )
     ap.add_argument("--cell-m", type=float, default=1500.0,
                     help="terrain grid cell size (m). Published numbers use 500")
     ap.add_argument("--edge-obs", action="store_true",
@@ -139,6 +148,8 @@ if __name__ == "__main__":
         meta["config"]["obs_edge_features"] = True
     if a.plateau:
         meta["config"]["plateau"] = True
+    if a.city_scenario:
+        meta["config"]["city_scenario"] = a.city_scenario
     resume_from = _resume_checkpoint(out, meta, a.override_resume) if a.resume else None
     try:
         runmeta.write_metadata(out, meta)
@@ -151,6 +162,15 @@ if __name__ == "__main__":
     if a.route_mode != "legacy":
         env_overrides["route_mode"] = a.route_mode
     cfg, hmap, notes = env_from_theatre(aoi=a.aoi, n_threat=a.threats, cell_m=a.cell_m, **env_overrides)
+    if a.city_scenario:
+        theatre = a.aoi or DEFAULT_AOI
+        matches = [row for row in scenario_bank(theatre) if row.case == a.city_scenario]
+        if len(matches) != 1:
+            choices = ", ".join(row.case for row in scenario_bank(theatre)) or "none"
+            raise SystemExit(
+                f"unknown --city-scenario {a.city_scenario!r} for {theatre!r}; choices: {choices}"
+            )
+        cfg = config_for_scenario(cfg, matches[0])
     print(describe(notes))
     (out / runmeta.THEATRE_FILENAME).write_text(json.dumps(notes, indent=2, default=str))
 
@@ -164,4 +184,6 @@ if __name__ == "__main__":
         hmap=hmap,
         meta=meta,
         resume_from=resume_from,
+        urban_obstacles=notes.get("urban_obstacles") if cfg.urban.enabled else None,
+        env_origin_utm_m=notes.get("env_origin_utm_m") if cfg.urban.enabled else None,
     )

@@ -80,9 +80,12 @@ from .ppo import Learner
 from .red_team import RedCurriculum
 from .reward import RewardCurriculum, RewardWeights
 from ..env.config import (
+    MissionConfig,
     RESOURCE_WORLD_BASELINE,
     RESOURCE_WORLD_L1,
     ResourceWorldConfig,
+    UrbanPhysicsConfig,
+    WeatherConfig,
 )
 from ..env import mission as mission_mod
 from ..env import weather as weather_mod
@@ -571,6 +574,31 @@ def obs_config_from_blob(blob: dict) -> dict:
     out = {"obs_edge_features": bool(env_cfg.get("obs_edge_features", False))}
     if isinstance(blob.get("resource_config"), dict) or environment_model_from_blob(blob) == RESOURCE_WORLD_L1:
         out["resource"] = resource_config_from_blob(blob)
+    if int(blob.get("schema", 0)) >= 6:
+        def config(name, cls, tuple_fields=()):
+            raw = env_cfg.get(name)
+            if not isinstance(raw, dict):
+                raise CheckpointError(f"schema-6 checkpoint is missing env_cfg.{name}")
+            fields = {field.name for field in dataclasses.fields(cls)}
+            values = {key: value for key, value in raw.items() if key in fields}
+            for key in tuple_fields:
+                if key in values:
+                    values[key] = tuple(values[key])
+            return cls(**values)
+
+        weather = config(
+            "weather", WeatherConfig,
+            ("altitude_knots_m", "wind_enu_mps", "density_ratio", "temperature_k",
+             "sensing_attenuation", "turbulence_intensity_mps", "scale_length_m"),
+        )
+        weather = dataclasses.replace(
+            weather, wind_enu_mps=tuple(tuple(row) for row in weather.wind_enu_mps)
+        )
+        out.update(
+            weather=weather,
+            mission=config("mission", MissionConfig),
+            urban=config("urban", UrbanPhysicsConfig),
+        )
     return out
 
 

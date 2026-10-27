@@ -138,15 +138,33 @@ def build_env(*, aoi: str, n_blue: int, n_threat: int, cell_m: float, red_level:
     from ..env.theatre_bridge import env_from_theatre
     from ..rl.red_team import RedCurriculum
 
-    cfg, hmap, _notes = env_from_theatre(aoi=aoi, n_blue=n_blue, n_threat=n_threat, cell_m=cell_m)
+    cfg, hmap, notes = env_from_theatre(aoi=aoi, n_blue=n_blue, n_threat=n_threat, cell_m=cell_m)
     cfg = RedCurriculum().apply(cfg, red_level)
     if checkpoint is not None:
-        from ..rl.checkpoint import load as load_checkpoint, obs_config_from_blob, require_actor_ego_dim
+        from ..rl.checkpoint import (
+            load as load_checkpoint,
+            obs_config_from_blob,
+            require_actor_ego_dim,
+            require_environment_compatible,
+        )
 
         blob = load_checkpoint(checkpoint)
         cfg = cfg.replace(**obs_config_from_blob(blob))
         require_actor_ego_dim(blob["actor"], cfg, checkpoint)
-    return NaigosEnv(cfg, hmap=hmap)
+        require_environment_compatible(
+            blob,
+            cfg,
+            checkpoint,
+            urban_obstacle_digest=(
+                notes["urban_obstacle_evidence"]["content_sha256"] if cfg.urban.enabled else None
+            ),
+        )
+    return NaigosEnv(
+        cfg,
+        hmap=hmap,
+        urban_obstacles=notes.get("urban_obstacles") if cfg.urban.enabled else None,
+        env_origin_utm_m=notes.get("env_origin_utm_m") if cfg.urban.enabled else None,
+    )
 
 
 def _to_numpy_trace(traj):
@@ -181,7 +199,7 @@ def run_evaluation(env, plan: dict, candidate_params, champion_params=None, *,
     if plan["use_cbf"]:
         from ..rl.cbf import CBFConfig, make_policy_filter
 
-        afilter = make_policy_filter(CBFConfig(), env.cfg)
+        afilter = make_policy_filter(CBFConfig(), env.cfg, urban_surface=env.urban_surface)
 
     def measure(pol, identity=None) -> dict:
         record = identity is not None and trec.is_recording(recording)

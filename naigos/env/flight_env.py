@@ -125,6 +125,8 @@ class NaigosEnv:
             raise ValueError("invalid route configuration:\n" + "\n".join(f"  - {p}" for p in problems))
         self.cfg = cfg
         self.fixed_hmap = hmap
+        self.urban_obstacles = urban_obstacles if cfg.urban.enabled else None
+        self.env_origin_utm_m = env_origin_utm_m if cfg.urban.enabled else None
         if cfg.urban.enabled:
             if urban_obstacles is None:
                 raise ValueError("urban obstacle physics requires an explicitly validated artifact")

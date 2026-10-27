@@ -29,6 +29,7 @@ from naigos.rl import checkpoint as ck
 from naigos.rl.ppo import PPOConfig, init_learner
 from naigos.rl.red_team import RedCurriculum
 from naigos.rl.reward import RewardCurriculum, RewardWeights
+from naigos.rl.train import TrainConfig, run
 
 
 def _cfg():
@@ -108,3 +109,28 @@ def test_schema6_records_and_enforces_every_new_physics_identity(tmp_path):
     bad["environment_identity"]["cbf_contract_id"] = "other-cbf"
     with pytest.raises(ck.CheckpointError, match="cbf_contract_id"):
         ck.require_environment_compatible(bad, cfg, "changed-cbf", urban_obstacle_digest=digest)
+
+
+def test_training_threads_validated_artifact_into_checkpoint_and_resume_gate(tmp_path):
+    cfg = dataclasses.replace(_cfg(), max_steps=2)
+    grid = load_urban_obstacles(fx.committed_dir())
+    ppo = PPOConfig(n_envs=1, n_steps=2, n_epochs=1, n_minibatches=1)
+    out = tmp_path / "physics-train"
+    run(
+        cfg,
+        ppo,
+        TrainConfig(iterations=1, eval_every=1, eval_worlds=1, checkpoint_every=1, out_dir=str(out)),
+        hmap=jnp.zeros((64, 64)),
+        urban_obstacles=grid,
+        env_origin_utm_m=grid.meta.env_origin_utm_m,
+    )
+    blob = ck.load(out / "ckpt_000001")
+    assert blob["environment_identity"]["urban_obstacle_sha256"] == grid.hashes.content_sha256
+    ck.require_resume_compatible(
+        blob,
+        cfg,
+        ppo,
+        ck.policies.get_policy_spec(cfg, family=ppo.policy_family, version=ppo.policy_version),
+        "physics-train",
+        urban_obstacle_digest=grid.hashes.content_sha256,
+    )
