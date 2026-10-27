@@ -686,6 +686,8 @@ class NaigosEnv:
                 "burn_multiplier": state2.resource.burn_multiplier,
                 "diversion_pos": state2.resource.diversion_pos,
                 "diversion_active": state2.resource.diversion_active,
+                "objective": state2.objective,
+                "bounds": state2.bounds,
                 "resource_observation": obs2.ego[:, -self.cfg.resource.observation_dim:]
                 if self.cfg.resource.enabled
                 else jnp.zeros((self.cfg.n_blue, 0), dtype=obs2.ego.dtype),

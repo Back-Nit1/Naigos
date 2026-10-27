@@ -118,6 +118,8 @@ class VerificationReport:
     shootdowns: int
     terrain_violations: int
     bounds_violations: int
+    fuel_losses: int
+    diversions: int
     ceiling_violations: int
     envelope_dwell_steps: int
     total_cost: float  # terminal airframe losses only; matches reward.constraint_cost
@@ -133,6 +135,7 @@ class VerificationReport:
         head = (
             f"steps={self.steps} shootdowns={self.shootdowns} "
             f"terrain={self.terrain_violations} bounds={self.bounds_violations} "
+            f"fuel={self.fuel_losses} diversions={self.diversions} "
             f"ceiling={self.ceiling_violations} envelope_dwell={self.envelope_dwell_steps} "
             f"cost={self.total_cost:.2f} mean_pd={self.mean_exposure:.4f} "
             f"max_pd_err={self.max_pd_error:.2e}"
@@ -169,17 +172,18 @@ def verify_trace(
     af = cfg.airframe
 
     mismatches: list[str] = []
-    shoot = terr = bounds = ceil = dwell_steps = 0
+    shoot = terr = bounds = fuel_losses = diversions = ceil = dwell_steps = 0
     pd_sum = 0.0
     pd_n = 0
     max_pd_err = 0.0
     lock = np.zeros((cfg.n_threat, B))
     dwell = np.zeros((cfg.n_threat, B))
     reached = np.zeros(B, dtype=bool)
+    diverted = np.zeros(B, dtype=bool)
     prev_alive = np.ones(B, dtype=bool)
 
     for s in range(S):
-        live = prev_alive & ~reached
+        live = prev_alive & ~reached & ~diverted
         pd, slant, _vis, alt_agl = detection_probability(
             hmap, cfg, pos[s], psi[s], tpos[s], kp, threat_active
         )
@@ -200,11 +204,13 @@ def verify_trace(
 
         # --- independent recomputation of the hard constraints -----------------
         terr_v = (alt_agl < af.floor_agl) & live
+        box = np.asarray(traj.get("bounds", [0, cfg.terrain.extent_x, 0, cfg.terrain.extent_y]))
+        box = box[s] if box.ndim == 2 else box
         oob_v = (
-            (pos[s][:, 0] < 0)
-            | (pos[s][:, 0] > cfg.terrain.extent_x)
-            | (pos[s][:, 1] < 0)
-            | (pos[s][:, 1] > cfg.terrain.extent_y)
+            (pos[s][:, 0] < box[0])
+            | (pos[s][:, 0] > box[1])
+            | (pos[s][:, 1] < box[2])
+            | (pos[s][:, 1] > box[3])
         ) & live
         ceil_v = (pos[s][:, 2] >= af.ceiling - 1e-3) & live
         dwell_v = np.any(in_env & (lock > 0.05), axis=0) & live
@@ -216,8 +222,12 @@ def verify_trace(
 
         now_alive = np.asarray(alive[s], dtype=bool)
         died = prev_alive & ~now_alive
-        killed_by_fire = died & ~terr_v & ~oob_v
+        dry_v = np.asarray(terms.out_of_fuel[s], dtype=bool) if cfg.resource.enabled else np.zeros(B, bool)
+        divert_v = np.asarray(traj.get("diverted", np.zeros_like(alive))[s], dtype=bool) & ~diverted
+        killed_by_fire = died & ~terr_v & ~oob_v & ~dry_v
         shoot += int(killed_by_fire.sum())
+        fuel_losses += int(dry_v.sum())
+        diversions += int(divert_v.sum())
 
         # A kill can only be logged where a threat actually had a firing
         # solution. This is the check that catches a phantom-shootdown bug.
@@ -244,6 +254,7 @@ def verify_trace(
         pd_n += int(live.sum())
 
         reached = reached | np.asarray(traj["reached"][s], dtype=bool)
+        diverted = diverted | divert_v
         prev_alive = now_alive
 
     # The CMDP cost channel is TERMINAL ONLY -- it must match
@@ -251,15 +262,202 @@ def verify_trace(
     # different constraint from the one being optimised. Lethal-envelope dwell
     # is reported separately as a diagnostic, not summed in.
     total_cost = float(shoot + terr + bounds)
+    if cfg.resource.enabled:
+        total_cost += float(fuel_losses)
     return VerificationReport(
         steps=S,
         shootdowns=shoot,
         terrain_violations=terr,
         bounds_violations=bounds,
+        fuel_losses=fuel_losses,
+        diversions=diversions,
         ceiling_violations=ceil,
         envelope_dwell_steps=dwell_steps,
         total_cost=total_cost,
         mean_exposure=pd_sum / max(pd_n, 1),
         max_pd_error=max_pd_err,
+        mismatches=mismatches,
+    )
+
+
+@dataclasses.dataclass
+class ResourceVerificationReport:
+    """Independent L1 fuel, gate, outcome, and actor-observation checks."""
+
+    steps: int
+    fuel_losses: int
+    diversions: int
+    max_fuel_error: float
+    max_observation_error: float
+    mismatches: list[str]
+
+    @property
+    def ok(self) -> bool:
+        return not self.mismatches
+
+
+def _resource_observation_numpy(cfg: EnvConfig, pos, psi, speed, fuel, objective,
+                                initial, reserve, multiplier, gates, active):
+    """Independent NumPy implementation of ResourceObservation-v1."""
+    af = cfg.airframe
+
+    def rate(v):
+        throttle = np.clip((v - af.v_stall) / (af.v_max - af.v_stall), 0.0, 1.0)
+        return (af.burn_base + af.burn_throttle * throttle) * multiplier
+
+    scale = np.maximum(initial, 1e-3)
+    direct_distance = np.linalg.norm(objective[:, :2] - pos[:, :2], axis=-1)
+    primary_need = direct_distance / np.maximum(speed, af.v_stall) * rate(speed)
+    gate_distance = np.linalg.norm(gates[..., :2] - pos[:, None, :2], axis=-1)
+    gate_need = gate_distance / np.maximum(speed[:, None], af.v_stall) * rate(speed)[:, None]
+    burn = rate(speed)
+    best_margin = np.max(
+        np.where(active, fuel[:, None] - reserve[:, None] - gate_need, -1e9), axis=1
+    )
+    scalar = np.stack([
+        fuel / scale,
+        reserve / scale,
+        np.clip(fuel / np.maximum(burn * cfg.dt * cfg.max_steps, 1e-3), 0.0, 4.0),
+        (fuel - reserve - primary_need) / scale,
+        best_margin / scale,
+        burn / max(af.burn_base + af.burn_throttle, 1e-3),
+    ], axis=-1)
+
+    rel = gates - pos[:, None, :]
+    c, s = np.cos(psi)[:, None], np.sin(psi)[:, None]
+    rel_x = rel[..., 0] * c + rel[..., 1] * s
+    rel_y = -rel[..., 0] * s + rel[..., 1] * c
+    bearing = np.arctan2(rel_y, rel_x)
+    gate = np.stack([
+        rel_x / 50_000.0,
+        rel_y / 50_000.0,
+        gate_distance / 90_000.0,
+        np.sin(bearing),
+        np.cos(bearing),
+        (fuel[:, None] - reserve[:, None] - gate_need) / scale[:, None],
+        active.astype(np.float64),
+    ], axis=-1)
+    gate *= active[..., None]
+    return np.concatenate([scalar, gate.reshape(pos.shape[0], -1)], axis=-1)
+
+
+def verify_resource_trace(cfg: EnvConfig, traj: dict[str, Any], tol: float = 3e-3) -> ResourceVerificationReport:
+    """Verify L1 from logged state without importing JAX resource code.
+
+    The log carries realized episode samples so this routine checks transitions,
+    not the pseudorandom generator. Seed/provenance checks belong to the frozen
+    resource-bank contract.
+    """
+    if not cfg.resource.enabled:
+        raise ValueError("resource trace verification requires resource-world-v1/endurance")
+
+    pos = np.asarray(traj["pos"], dtype=np.float64)
+    psi = np.asarray(traj["psi"], dtype=np.float64)
+    speed_log = np.asarray(traj["speed"], dtype=np.float64)
+    phi_log = np.asarray(traj["phi"], dtype=np.float64)
+    fuel_log = np.asarray(traj["fuel"], dtype=np.float64)
+    actions = np.asarray(traj["action"], dtype=np.float64)
+    initial = np.asarray(traj["initial_fuel"], dtype=np.float64)
+    reserve = np.asarray(traj["reserve_fuel"], dtype=np.float64)
+    multiplier = np.asarray(traj["burn_multiplier"], dtype=np.float64)
+    gates = np.asarray(traj["diversion_pos"], dtype=np.float64)
+    active = np.asarray(traj["diversion_active"], dtype=bool)
+    objective = np.asarray(traj["objective"], dtype=np.float64)
+    observed = np.asarray(traj["resource_observation"], dtype=np.float64)
+    outcomes = np.asarray(traj["outcome"], dtype=np.uint8)
+    diverted_log = np.asarray(traj["diverted"], dtype=bool)
+    terms = traj["terms"]
+
+    steps, agents = fuel_log.shape
+    fuel = initial[0].copy()
+    speed = np.full(agents, cfg.airframe.v_init, dtype=np.float64)
+    phi = np.zeros(agents, dtype=np.float64)
+    terminal = np.zeros(agents, dtype=bool)
+    expected_outcome = np.zeros(agents, dtype=np.uint8)
+    max_fuel_error = 0.0
+    max_obs_error = 0.0
+    fuel_losses = diversions = 0
+    mismatches: list[str] = []
+    af = cfg.airframe
+
+    for t in range(steps):
+        was_fuel = fuel.copy()
+        was_terminal = terminal.copy()
+        for _ in range(cfg.substeps):
+            act = np.clip(actions[t], -1.0, 1.0)
+            phi_cmd = act[:, 0] * np.arccos(1.0 / af.n_max)
+            phi = phi + (phi_cmd - phi) * min((cfg.dt / cfg.substeps) / af.tau_bank, 1.0)
+            speed_cmd = af.v_stall + 0.5 * (act[:, 2] + 1.0) * (af.v_max - af.v_stall)
+            speed = speed + (speed_cmd - speed) * min((cfg.dt / cfg.substeps) / af.tau_speed, 1.0)
+            speed = np.clip(speed, af.v_stall, af.v_max)
+            throttle = (speed - af.v_stall) / (af.v_max - af.v_stall)
+            load = 1.0 / np.maximum(np.cos(phi), 1e-3)
+            burn = af.burn_base + af.burn_throttle * throttle + af.burn_maneuver * np.abs(load - 1.0)
+            fuel = np.maximum(fuel - (cfg.dt / cfg.substeps) * burn * multiplier[t], 0.0)
+            dry_substep = fuel <= 0.0
+            speed = np.where(dry_substep, np.maximum(speed - 5.0 * (cfg.dt / cfg.substeps), af.v_stall), speed)
+        fuel = np.where(was_terminal, was_fuel, fuel)
+        speed = np.where(was_terminal, speed_log[t], speed)
+        phi = np.where(was_terminal, phi_log[t], phi)
+
+        ferr = np.abs(fuel - fuel_log[t])
+        max_fuel_error = max(max_fuel_error, float(ferr.max()))
+        if ferr.max() > tol:
+            mismatches.append(f"t={t}: fuel mismatch, max error {ferr.max():.3e}")
+
+        dry = (was_fuel > 0.0) & (fuel <= 0.0) & ~was_terminal
+        env_dry = np.asarray(terms.out_of_fuel[t], dtype=bool)
+        if not np.array_equal(dry, env_dry):
+            mismatches.append(f"t={t}: out_of_fuel does not match first zero crossing")
+
+        arrived = np.asarray(terms.arrived[t], dtype=bool)
+        shot = np.asarray(terms.shotdown[t], dtype=bool)
+        terrain = np.asarray(terms.terrain_violation[t], dtype=bool)
+        bounds = np.asarray(terms.bounds_violation[t], dtype=bool)
+        gate_distance = np.linalg.norm(gates[t, ..., :2] - pos[t, :, None, :2], axis=-1)
+        at_gate = np.any((gate_distance <= cfg.resource.gate_arrival_radius) & active[t], axis=-1)
+        expected_divert = at_gate & ~arrived & ~shot & ~terrain & ~bounds & ~dry & ~was_terminal
+        env_divert = np.asarray(terms.diverted[t], dtype=bool)
+        if not np.array_equal(expected_divert, env_divert):
+            mismatches.append(f"t={t}: diversion does not match first active-gate crossing")
+
+        new = np.zeros(agents, dtype=np.uint8)
+        new[arrived] = 1
+        new[expected_divert] = 2
+        new[shot] = 3
+        new[bounds] = 5
+        new[terrain] = 4
+        new[dry] = 6
+        timeout = (t + 1 >= cfg.max_steps) & ~was_terminal & (new == 0)
+        new[timeout] = 7
+        expected_outcome = np.where(expected_outcome == 0, new, expected_outcome)
+        if not np.array_equal(expected_outcome, outcomes[t]):
+            mismatches.append(f"t={t}: terminal outcome label mismatch")
+
+        expected_obs = _resource_observation_numpy(
+            cfg, pos[t], psi[t], speed_log[t], fuel_log[t], objective[t], initial[t],
+            reserve[t], multiplier[t], gates[t], active[t],
+        )
+        oerr = np.abs(expected_obs - observed[t])
+        max_obs_error = max(max_obs_error, float(oerr.max()))
+        if oerr.max() > 10 * tol:
+            mismatches.append(f"t={t}: resource observation mismatch, max error {oerr.max():.3e}")
+
+        fuel_losses += int(dry.sum())
+        diversions += int(expected_divert.sum())
+        terminal |= new != 0
+        fuel = fuel_log[t].copy()
+        speed = speed_log[t].copy()
+        phi = phi_log[t].copy()
+
+        if not np.array_equal(diverted_log[t], expected_outcome == 2):
+            mismatches.append(f"t={t}: cumulative diverted flag disagrees with outcome")
+
+    return ResourceVerificationReport(
+        steps=steps,
+        fuel_losses=fuel_losses,
+        diversions=diversions,
+        max_fuel_error=max_fuel_error,
+        max_observation_error=max_obs_error,
         mismatches=mismatches,
     )
