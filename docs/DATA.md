@@ -11,7 +11,7 @@ Raw bytes live in `data_cache/` (gitignored, regenerable); `data_cache/manifest.
 | --- | --- | --- |
 | USGS 3D Elevation Program (3DEP) | Public domain (US Government work, USGS) | Terrain elevation grid for radar line-of-sight masking and terrain-following routes. |
 | Copernicus DEM GLO-30 | Copernicus DEM free/open licence (ESA/Airbus), attribution required | Global DEM fallback where 3DEP has no coverage. |
-| USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data) | Public domain (US Government work, USGS) | Structure heights for the physics-grade urban obstacle artifact: ASPRS class-6 (building) returns over bare-earth class-2 returns. Physics evidence, unlike OSM. |
+| USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data) | Public domain (US Government work, USGS) | Structure heights for the physics-grade urban obstacle artifact: the provider's building and bridge-deck returns (or, where it classified no buildings, unclassified surface returns) over its bare-earth returns. Physics evidence, unlike OSM. |
 | NYC Building Footprints (NYC Open Data, DoITT/OTI) | NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source) | Authoritative footprints and roof heights for nyc_harbor's urban physics box, reconciled with USGS 3DEP lidar. Dated source: the model is a capture-date snapshot, never a statement about current conditions. |
 | OurAirports | Public domain (dedicated to the public domain by OurAirports) | Airfield and runway geometry -> sortie start points, objectives, no-fly structure. |
 | OpenSky Network REST API | Free for non-commercial / research use under the OpenSky Network terms | Real civil aircraft kinematics -> calibrate airframe speed/climb/turn-rate envelopes. |

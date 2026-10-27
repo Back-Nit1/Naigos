@@ -601,5 +601,8 @@ def build_artifact(aoi: AOI, dem_npz: Path, cache_root: Path | None = None, forc
     root = cache_root if cache_root is not None else cache.cache_dir()
     path = uo.write_urban_obstacles(grid, root)
     stats.update(grid.evidence())
+    hb = grid.height_agl_m[grid.building == 1]
+    stats["building_height_m_p50_p90_p99_max"] = [round(float(v), 1) for v in (*np.percentile(hb, [50, 90, 99]), hb.max())]
+    stats["exclusion_cells"] = {e.name: e.cells for e in exclusions}
     stats["excluded_cells"] = sum(e.cells for e in exclusions)
     return grid, path, stats, inputs

@@ -85,8 +85,9 @@ ALLOWLIST: dict[str, Source] = {
             "the USGS National Map Access API."
         ),
         role=(
-            "Structure heights for the physics-grade urban obstacle artifact: ASPRS class-6 "
-            "(building) returns over bare-earth class-2 returns. Physics evidence, unlike OSM."
+            "Structure heights for the physics-grade urban obstacle artifact: the provider's "
+            "building and bridge-deck returns (or, where it classified no buildings, unclassified "
+            "surface returns) over its bare-earth returns. Physics evidence, unlike OSM."
         ),
         docs=("https://www.usgs.gov/3d-elevation-program", "https://usgs.entwine.io/"),
         notes=(
