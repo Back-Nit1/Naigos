@@ -339,6 +339,7 @@ class Counters:
     terrain: int = 0
     bounds: int = 0
     fuel: int = 0
+    diverted: int = 0  # L1 safe recoveries; finished, but not objectives reached
 
     # the layout being flown now, and the last PER_LAYOUT_KEEP closed ones
     layout: dict = field(default_factory=lambda: Counters._new_layout(1))
@@ -362,20 +363,23 @@ class Counters:
         return {**t, "sim_seconds": round(t["sim_seconds"], 1),
                 "success_rate": round(t["reached"] / t["finished"], 4) if t["finished"] else None}
 
-    def record(self, reached=0, shot_down=0, terrain=0, bounds=0, fuel=0) -> None:
+    def record(self, reached=0, shot_down=0, terrain=0, bounds=0, fuel=0, diverted=0) -> None:
         """One step's outcomes, into the cumulative tally and the current layout's."""
         self.reached += reached
         self.shot_down += shot_down
         self.terrain += terrain
         self.bounds += bounds
         self.fuel += fuel
+        self.diverted += diverted
         t = self.layout
         t["reached"] += reached
         t["shot_down"] += shot_down
         t["terrain"] += terrain
         t["bounds"] += bounds
         t["fuel"] += fuel
-        t["finished"] += reached + shot_down + terrain + bounds + fuel
+        if diverted:  # L1 only: the published baseline-v0 layout keys stay exactly as they were
+            t["diverted"] = t.get("diverted", 0) + diverted
+        t["finished"] += reached + shot_down + terrain + bounds + fuel + diverted
 
     def tick(self, dt: float) -> None:
         self.layout["sim_seconds"] += dt
@@ -396,7 +400,7 @@ class Counters:
 
     def as_dict(self) -> dict:
         lost = self.shot_down + self.terrain + self.bounds + self.fuel
-        done = self.reached + lost
+        done = self.reached + lost + self.diverted
         return {
             "sorties_launched": self.sorties,
             "objectives_reached": self.reached,
@@ -404,6 +408,7 @@ class Counters:
             "terrain_losses": self.terrain,
             "bounds_losses": self.bounds,
             "fuel_losses": self.fuel,
+            "safe_diversions": self.diverted,
             "success_rate": round(self.reached / done, 3) if done else None,
             "current_layout": self._layout_view(self.layout),
             "per_layout": [self._layout_view(t) for t in self.recent_layouts],
@@ -557,6 +562,7 @@ class Simulation:
                 terrain=int(np.asarray(t.terrain_violation).sum()),
                 bounds=int(np.asarray(t.bounds_violation).sum()),
                 fuel=int(np.asarray(t.out_of_fuel).sum()),
+                diverted=int(np.asarray(t.diverted).sum()),
             )
             self.counters.tick(cfg.dt)
 
