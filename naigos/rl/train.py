@@ -566,14 +566,15 @@ def run(
         f"x{dev['device_count']} {', '.join(dev['devices']) or 'unknown'}"
     )
     if meta is not None:
+        meta_config = {
+            **(meta.get("config") or {}),
+            "policy_family": policy_spec.family.value,
+            "policy_version": policy_spec.version,
+            "recurrent_seq_len": int(ppo_cfg.recurrent_seq_len),
+        }
         meta = {
             **meta,
-            "policy": {
-                "family": policy_spec.family.value,
-                "version": policy_spec.version,
-                "parameter_count": policy_spec.parameter_count,
-                "spec_sha256": policy_spec.sha256,
-            },
+            "config": meta_config,
             "runtime": {**(meta.get("runtime") or {}), **dev},
         }
         meta, fresh = runmeta.write_metadata(out, meta)

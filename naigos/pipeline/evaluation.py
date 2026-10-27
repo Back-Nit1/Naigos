@@ -25,6 +25,7 @@ rest of the package stays importable (and testable) without it.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 from pathlib import Path
 
@@ -103,11 +104,24 @@ def checkpoint_entry(path: str | Path) -> dict:
             "iteration": runmeta.checkpoint_iteration(path)}
 
 
-def load_actor_params(path: str | Path):
-    """The actor parameters, where the demo has always read them."""
+@dataclasses.dataclass(frozen=True)
+class LoadedActor:
+    params: object
+    family: str = "deepsets"
+    version: str = "1"
+
+
+def load_actor_params(path: str | Path) -> LoadedActor:
+    """Actor parameters plus the checkpoint's deployable policy identity."""
     from ..rl import checkpoint as ck
 
-    return ck.load(path)["actor"]
+    blob = ck.load(path)
+    identity = ck.policy_identity(blob)
+    return LoadedActor(
+        params=blob["actor"],
+        family=identity["family"],
+        version=identity["version"],
+    )
 
 
 # --- the JAX part ------------------------------------------------------------------
@@ -166,7 +180,14 @@ def run_evaluation(env, plan: dict, candidate_params, champion_params=None) -> d
         final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter)))(keys)
         return rollout_metrics(final, traj, n, env.cfg.n_blue)
 
-    cand_pol = greedy_policy(candidate_params, env.cfg)
+    def actor_policy(value):
+        if isinstance(value, LoadedActor):
+            return greedy_policy(
+                value.params, env.cfg, family=value.family, version=value.version
+            )
+        return greedy_policy(value, env.cfg)
+
+    cand_pol = actor_policy(candidate_params)
     result = {
         "candidate": measure(cand_pol),
         "baselines": {name: measure(pol) for name, pol in BASELINE_POLICIES.items()},
@@ -175,7 +196,7 @@ def run_evaluation(env, plan: dict, candidate_params, champion_params=None) -> d
     }
     if champion_params is not None:
         try:
-            result["champion_metrics"] = measure(greedy_policy(champion_params, env.cfg))
+            result["champion_metrics"] = measure(actor_policy(champion_params))
         except Exception as e:  # noqa: BLE001 - an incompatible champion is inconclusive, not fatal
             result["champion_error"] = f"{type(e).__name__}: {e}"
 

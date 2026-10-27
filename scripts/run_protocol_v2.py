@@ -178,7 +178,9 @@ def build_report(plan: dict, runs_root, out_dir, *, make_env=theatre_env, eval_r
             bkey = (ev, tuple(flags.values()))  # baselines are rescored if a run's env flags differ
             if bkey not in baselines:
                 baselines[bkey] = {n: evaluate_route_bank(env, pol, splits=splits) for n, pol in BASELINE_POLICIES.items()}
-            res = evaluate_route_bank(env, greedy_policy(blob["actor"], env.cfg), splits=splits,
+            res = evaluate_route_bank(env, greedy_policy(
+                blob["actor"], env.cfg, **ckpt.policy_kwargs(blob)
+            ), splits=splits,
                                       training_seeds=[r["seed"]])
             for m in METRICS:
                 records[m].append({"train": train, "eval": ev, "seed": r["seed"],

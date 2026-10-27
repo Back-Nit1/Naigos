@@ -267,6 +267,9 @@ def build_metadata(
     code: dict | None = None,
     runtime: dict | None = None,
     launcher: str | None = None,
+    policy_family: str = "deepsets",
+    policy_version: str = "1",
+    recurrent_seq_len: int = 32,
     now: datetime | None = None,
 ) -> dict:
     """The `run.json` payload.
@@ -291,6 +294,9 @@ def build_metadata(
             "synthetic": bool(synthetic),
             "aoi": aoi,
             "use_cbf": bool(use_cbf),
+            "policy_family": str(policy_family),
+            "policy_version": str(policy_version),
+            "recurrent_seq_len": int(recurrent_seq_len),
             "env_steps_per_iteration": profile.env_steps_per_iteration,
             "total_env_steps": profile.total_env_steps,
         },
@@ -303,7 +309,16 @@ def build_metadata(
 
 
 def identity(meta: dict) -> dict:
-    return {k: meta.get(k) for k in IDENTITY_KEYS}
+    out = {k: meta.get(k) for k in IDENTITY_KEYS}
+    # Metadata written before the model ladder can only describe DeepSets v1.
+    # Normalize that historical omission so old runs remain retryable/resumable
+    # without allowing them to masquerade as a recurrent run.
+    config = dict(out.get("config") or {})
+    config.setdefault("policy_family", "deepsets")
+    config.setdefault("policy_version", "1")
+    config.setdefault("recurrent_seq_len", 32)
+    out["config"] = config
+    return out
 
 
 def read_metadata(directory: str | os.PathLike) -> dict | None:
@@ -1113,11 +1128,20 @@ RESUME_BLOCKING_KEYS = (
     "config.obs_edge_features",
     "config.plateau",
     "config.block_iterations",
+    "config.policy_family",
+    "config.policy_version",
+    "config.recurrent_seq_len",
     # Not a `run.json` field: the curricula live in code, so only a code change
     # can move them. Named here so it is a legal `--override-resume` key and so
     # `naigos.rl.checkpoint` and this module share one vocabulary.
     "curriculum",
 )
+
+_LEGACY_POLICY_DEFAULTS = {
+    "config.policy_family": "deepsets",
+    "config.policy_version": "1",
+    "config.recurrent_seq_len": 32,
+}
 
 
 def _dig(meta: dict, dotted: str):
@@ -1158,6 +1182,9 @@ def resume_compatibility(existing: dict | None, requested: dict, *, overrides=()
     blocking, overridden, changes = [], [], {}
     for key in RESUME_BLOCKING_KEYS:
         old, new = _dig(existing, key), _dig(requested, key)
+        if key in _LEGACY_POLICY_DEFAULTS:
+            old = _LEGACY_POLICY_DEFAULTS[key] if old is None else old
+            new = _LEGACY_POLICY_DEFAULTS[key] if new is None else new
         if old == new:
             continue
         changes[key] = {"recorded": old, "requested": new}

@@ -504,6 +504,10 @@ class Simulation:
         self.key = jax.random.PRNGKey(self.seed)
         self.key, k0 = jax.random.split(self.key)
         self.state, self.obs = self.env.reset(k0)
+        initial_memory = getattr(self.policy, "initial_memory", None)
+        self.policy_memory = (
+            None if initial_memory is None else jnp.array(initial_memory)
+        )
         self.counters.sorties = cfg.n_blue
         self.sim_t = 0.0
 
@@ -514,7 +518,9 @@ class Simulation:
             self._afilter = make_policy_filter(CBFConfig(), cfg)
 
         # jit once, up front, so the first frame is not a 2 s stall
-        self._step = jax.jit(self._raw_step)
+        self._step = jax.jit(
+            self._raw_step if self.policy_memory is None else self._raw_recurrent_step
+        )
         self._respawn = jax.jit(self.env.respawn)
         self._reroll = jax.jit(self.env.reroll_threats)
         self._next_reroll = self.reroll_s
@@ -537,6 +543,31 @@ class Simulation:
         state2, obs2, terms, done, info = self.env.step(state, action)
         return state2, obs2, terms, info, feasible, k_next
 
+    def _raw_recurrent_step(self, state, obs, memory, key):
+        k_pol, k_next = jax.random.split(key)
+        action, memory = self.policy(obs, k_pol, memory)
+        feasible = jnp.ones((self.env.cfg.n_blue,), dtype=bool)
+        if self._afilter is not None:
+            action, feasible = self._afilter(state, obs, action)
+        state2, obs2, terms, done, info = self.env.step(state, action)
+        memory = jnp.where(
+            (info["agent_done"] | done)[..., None],
+            jnp.zeros_like(memory), memory,
+        )
+        return state2, obs2, memory, terms, info, feasible, k_next
+
+    def _reset_policy_memory(self, done_mask=None):
+        """Clear GRU state at sortie or complete world-layout boundaries."""
+        if self.policy_memory is None:
+            return
+        if done_mask is None:
+            self.policy_memory = jnp.zeros_like(self.policy_memory)
+        else:
+            self.policy_memory = jnp.where(
+                jnp.asarray(done_mask, dtype=bool)[..., None],
+                jnp.zeros_like(self.policy_memory), self.policy_memory,
+            )
+
     # ------------------------------------------------------------------ loop
     def run(self):
         cfg = self.env.cfg
@@ -546,7 +577,14 @@ class Simulation:
         while not self._stop.is_set():
             self.key, k = jax.random.split(self.key)
             state_before = self.state
-            state2, obs2, terms, info, feasible, _ = self._step(self.state, self.obs, k)
+            if self.policy_memory is None:
+                state2, obs2, terms, info, feasible, _ = self._step(
+                    self.state, self.obs, k
+                )
+            else:
+                state2, obs2, self.policy_memory, terms, info, feasible, _ = self._step(
+                    self.state, self.obs, self.policy_memory, k
+                )
 
             t = jax.device_get(terms)
             # Counted before any reroll below, so a step's outcomes belong to
@@ -572,6 +610,7 @@ class Simulation:
                 self.key, kr = jax.random.split(self.key)
                 self.state = self._respawn(self.state, kr, jnp.asarray(done_mask))
                 self.obs = self.env.observe(self.state)
+                self._reset_policy_memory(done_mask)
                 self.counters.sorties += int(done_mask.sum())
                 # a new sortie: nothing from the old one can be emitted again
                 self.events.retask(done_mask)
@@ -580,6 +619,9 @@ class Simulation:
                 self.key, kt = jax.random.split(self.key)
                 self.state = self._reroll(self.state, kt)
                 self.obs = self.env.observe(self.state)
+                # A newly sampled threat world must not inherit hidden features
+                # about the layout it replaced.
+                self._reset_policy_memory()
                 self._next_reroll += self.reroll_s
                 self.threat_draws += 1
                 self.counters.close_layout()

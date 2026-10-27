@@ -73,6 +73,25 @@ def test_an_incompatible_champion_is_recorded_not_fatal(env_and_params):
     assert "champion_error" in out and "champion_metrics" not in out
 
 
+def test_pipeline_evaluator_uses_loaded_recurrent_policy_identity():
+    env = NaigosEnv(CFG)
+    key = jax.random.PRNGKey(73)
+    _, obs = env.reset(key)
+    ppo = PPOConfig(
+        n_envs=2, n_steps=4, n_minibatches=2,
+        policy_family="recurrent", recurrent_seq_len=2,
+    )
+    learner = init_learner(key, CFG, ppo, obs)
+    actor = evaluation.LoadedActor(learner.actor.params, "recurrent", "1")
+    result = evaluation.run_evaluation(
+        env,
+        {**PLAN, "seeds": [900001], "worlds_per_seed": 1, "verifier_episodes": 0},
+        actor,
+    )
+    assert result["n_episodes"] == 1
+    assert 0.0 <= result["candidate"]["survival_rate"] <= 1.0
+
+
 def test_the_real_record_feeds_the_gates(tmp_path, measured):
     import orbax.checkpoint as ocp
 

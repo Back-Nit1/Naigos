@@ -349,7 +349,7 @@ if modal is not None:
 
         env = ev.build_env(aoi=env_shape["aoi"], n_blue=env_shape["n_blue"],
                            n_threat=env_shape["n_threat"], cell_m=env_shape["cell_m"],
-                           red_level=env_shape["red_level"])
+                           red_level=env_shape["red_level"], checkpoint=candidate_ckpt)
         champ = None
         if champion_ckpt is not None:
             try:
