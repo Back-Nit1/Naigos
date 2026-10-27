@@ -214,10 +214,17 @@ def build_plan(config: Mapping[str, Any], *, code: Mapping[str, Any] | None = No
     _exact_keys(
         rates,
         required={"gpu_hourly_usd", "cpu_core_hourly_usd", "memory_gib_hourly_usd",
-                  "gpu_count", "cpu_cores", "memory_gib"},
+                  "gpu_kind", "gpu_count", "cpu_cores", "memory_gib"},
         optional=set(), where="cost_rates",
     )
-    rates = {k: _finite_nonnegative(v, f"cost_rates.{k}") for k, v in rates.items()}
+    rates = {
+        "gpu_kind": _label(rates["gpu_kind"], "cost_rates.gpu_kind"),
+        **{
+            k: _finite_nonnegative(v, f"cost_rates.{k}")
+            for k, v in rates.items()
+            if k != "gpu_kind"
+        },
+    }
     dataset_sha = config.get("dataset_sha256")
     if dataset_sha is not None and (not isinstance(dataset_sha, str) or not _SHA256_RE.fullmatch(dataset_sha)):
         raise MatrixError("dataset_sha256 must be null or 64 lower-case hex characters")
@@ -354,6 +361,11 @@ def experiment_metadata(experiment: Mapping[str, Any], plan: Mapping[str, Any]) 
         "hyperparameters": experiment["hyperparameters"],
         "dataset_sha256": experiment["dataset_sha256"],
         "scenario_suite": experiment["scenario_suite"],
+        "cost_assumptions": {
+            "timeout_s": plan["timeout_s_per_job"],
+            "rates_and_reservation": plan["cost_rates"],
+            "upper_bound_cost_usd_per_job": plan["upper_bound_cost_usd_per_job"],
+        },
     }
     return meta
 

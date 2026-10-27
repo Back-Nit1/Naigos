@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -74,9 +75,32 @@ def _check_declared_timeout_covers_deployment(plan: dict, modal_runs) -> None:
         )
 
 
+def _check_declared_resources_match_deployment(plan: dict, modal_runs) -> None:
+    """Make the priced reservation identical to the deployed reservation."""
+    rates = plan["cost_rates"]
+    expected = {
+        "gpu_kind": modal_runs.GPU_KIND,
+        "gpu_count": modal_runs.GPU_COUNT,
+        "cpu_cores": modal_runs.CPU_CORES,
+        "memory_gib": modal_runs.MEMORY_MIB / 1024.0,
+    }
+    mismatches = {
+        key: {"declared": rates.get(key), "deployed": value}
+        for key, value in expected.items()
+        if rates.get(key) != value
+    }
+    if mismatches:
+        raise SystemExit(
+            "refusing submission: priced resource reservation does not match the "
+            f"deployed function: {mismatches}"
+        )
+
+
 def _submit_plan(plan: dict, *, max_cost_usd: float) -> list[dict]:
     matrix.verify_plan(plan)
     upper = float(plan["upper_bound_cost_usd"])
+    if not math.isfinite(max_cost_usd) or max_cost_usd < 0:
+        raise SystemExit("--max-cost-usd must be a finite non-negative number")
     if max_cost_usd < upper:
         raise SystemExit(
             f"refusing submission: declared upper-bound cost ${upper:.2f} exceeds "
@@ -104,6 +128,7 @@ def _submit_plan(plan: dict, *, max_cost_usd: float) -> list[dict]:
     from scripts import modal_runs
 
     _check_declared_timeout_covers_deployment(plan, modal_runs)
+    _check_declared_resources_match_deployment(plan, modal_runs)
 
     # Preflight every run before spawning the first one. submit_prepared repeats
     # both checks at the actual call boundary to close the race.
@@ -155,8 +180,10 @@ def main(argv=None) -> int:
     if not args.submit:
         print("dry-run only; no Modal import or remote call (pass --submit to change this)")
         return 0
-    if args.max_cost_usd is None or args.max_cost_usd < 0:
-        raise SystemExit("--submit requires a non-negative --max-cost-usd")
+    if args.max_cost_usd is None:
+        raise SystemExit("--submit requires a finite non-negative --max-cost-usd")
+    if not math.isfinite(args.max_cost_usd) or args.max_cost_usd < 0:
+        raise SystemExit("--max-cost-usd must be a finite non-negative number")
     _submit_plan(plan, max_cost_usd=args.max_cost_usd)
     return 0
 

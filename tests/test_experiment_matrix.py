@@ -39,6 +39,7 @@ def _config(**changes):
         ],
         "timeout_s": 1800,
         "cost_rates": {
+            "gpu_kind": "A10G",
             "gpu_hourly_usd": 1.0,
             "cpu_core_hourly_usd": 0.1,
             "memory_gib_hourly_usd": 0.01,
@@ -111,6 +112,8 @@ def test_run_metadata_makes_every_experiment_axis_immutable(tmp_path):
     assert len(x["policy"]["spec_basis"]["component_sha256"]) == 64
     assert x["scenario_suite"]["sha256"] == ROUTE_BANK_V1_SHA256
     assert x["resource"] == {"name": "baseline-v0", "config": {}}
+    assert x["cost_assumptions"]["rates_and_reservation"] == plan["cost_rates"]
+    assert x["cost_assumptions"]["timeout_s"] == 1800
     _, fresh = runmeta.write_metadata(tmp_path, meta)
     assert fresh
     changed = json.loads(json.dumps(meta))
@@ -187,6 +190,9 @@ def test_submit_requires_a_cost_ceiling_before_any_submit_call(monkeypatch, tmp_
     with pytest.raises(SystemExit, match="requires.*max-cost"):
         cli.main([str(path), "--submit"])
 
+    with pytest.raises(SystemExit, match="finite non-negative"):
+        cli.main([str(path), "--submit", "--max-cost-usd", "nan"])
+
 
 def test_submit_refuses_a_declared_timeout_below_deployed_ceiling():
     cli = _load_script("model_ladder")
@@ -209,6 +215,20 @@ def test_submit_refuses_a_declared_timeout_below_deployed_ceiling():
         code=CODE,
     )
     cli._check_declared_timeout_covers_deployment(covered, deployed)
+
+
+def test_submit_prices_the_exact_deployed_resource_reservation():
+    cli = _load_script("model_ladder")
+    plan = em.build_plan(_config(), code=CODE)
+    deployed = SimpleNamespace(
+        GPU_KIND="A10G", GPU_COUNT=1, CPU_CORES=2, MEMORY_MIB=4096,
+    )
+    cli._check_declared_resources_match_deployment(plan, deployed)
+
+    understated = json.loads(json.dumps(plan))
+    understated["cost_rates"]["gpu_count"] = 0
+    with pytest.raises(SystemExit, match="does not match the deployed function"):
+        cli._check_declared_resources_match_deployment(understated, deployed)
 
 
 def test_prepared_submit_uses_verified_smoke_and_writer_gates(monkeypatch):

@@ -116,6 +116,19 @@ def verify_image_source(requested: dict, environ=None) -> dict:
 # rather than matmul width -- a hypothesis the first run's `perf.json` will
 # confirm or refute, at which point this is the number to revisit.
 GPU_KIND = os.environ.get("NAIGOS_MODAL_GPU", "A10G")
+GPU_COUNT = 1
+CPU_CORES = float(os.environ.get("NAIGOS_MODAL_CPU_CORES", "4"))
+MEMORY_MIB = int(os.environ.get("NAIGOS_MODAL_MEMORY_MIB", str(16 * 1024)))
+
+
+def resource_reservation() -> dict:
+    """The explicit reservation shared by decorators and cost validation."""
+    return {
+        "gpu_kind": GPU_KIND,
+        "gpu_count": GPU_COUNT,
+        "cpu_cores": CPU_CORES,
+        "memory_gib": MEMORY_MIB / 1024.0,
+    }
 # Timeout: two of them, because one timeout for both sizes is a budget hazard in
 # whichever direction it is set. A smoke run that hangs must not be allowed to
 # bill six hours of GPU to prove the image works.
@@ -419,6 +432,7 @@ if modal is not None:
                 **(meta.get("runtime") or {}),
                 "image_source": image_source,
                 "modal_image_id": os.environ.get("MODAL_IMAGE_ID"),
+                "resource_reservation": resource_reservation(),
             },
         }
         _, history = run(
@@ -471,13 +485,15 @@ if modal is not None:
         volume.commit()
         return summary
 
-    @app.function(gpu=GPU_KIND, timeout=TIMEOUT_S, retries=MAX_RETRIES,
+    @app.function(gpu=GPU_KIND, cpu=CPU_CORES, memory=MEMORY_MIB,
+                  timeout=TIMEOUT_S, retries=MAX_RETRIES,
                   volumes={RUNS_ROOT: volume})
     def train_remote(spec: dict, meta: dict) -> dict:
         """The long-run entry point. Six-hour default ceiling."""
         return _train_impl(spec, meta)
 
-    @app.function(gpu=GPU_KIND, timeout=SMOKE_TIMEOUT_S, retries=MAX_RETRIES,
+    @app.function(gpu=GPU_KIND, cpu=CPU_CORES, memory=MEMORY_MIB,
+                  timeout=SMOKE_TIMEOUT_S, retries=MAX_RETRIES,
                   volumes={RUNS_ROOT: volume})
     def smoke_remote(spec: dict, meta: dict) -> dict:
         """Same code, same GPU, a thirty-minute ceiling.

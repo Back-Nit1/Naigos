@@ -52,9 +52,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from naigos.rl import runmeta  # noqa: E402
 from naigos.rl.modal_train import (  # noqa: E402
     APP_NAME,
+    CPU_CORES,
+    GPU_COUNT,
     GPU_KIND,
     LOG_FILENAME,
     MAX_RETRIES,
+    MEMORY_MIB,
     SMOKE_TIMEOUT_S,
     TIMEOUT_S,
     VOLUME_NAME,
