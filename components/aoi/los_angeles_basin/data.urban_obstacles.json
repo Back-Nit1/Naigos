@@ -14,10 +14,10 @@
   "parameters": {
     "schema": "naigos.urban_obstacles",
     "schema_version": 1,
-    "content_sha256": "0d052816073d4866a2f0109f1e07522576be5ef43374a1ccb3d21c066cb758ff",
-    "metadata_sha256": "095052b77f820d76f16d4b0e250d387b2c1b4568f539a6b8b651d1ca7e0d0b9d",
+    "content_sha256": "6f792719e131499fe4661a3d17b079d86ed247199387f8b66c9c59757699a787",
+    "metadata_sha256": "b88ff33f72619726df14f9fe24880a23ba0b246e9cfdeb207a14e8850b6380ff",
     "payload_sha256": "4b9a615b4532f2f7e557a93da462e4b92c171788e2c3ae3052fb6286f1183074",
-    "artifact_dir": "urban_physics/los_angeles_basin/0d052816073d4866",
+    "artifact_dir": "urban_physics/los_angeles_basin/6f792719e131499f",
     "cell_m": 10.0,
     "nx": 592,
     "ny": 546,
@@ -45,8 +45,8 @@
     "lidar_spike_cells_repaired": 0,
     "schema": "naigos.urban_obstacles",
     "schema_version": 1,
-    "content_sha256": "0d052816073d4866a2f0109f1e07522576be5ef43374a1ccb3d21c066cb758ff",
-    "metadata_sha256": "095052b77f820d76f16d4b0e250d387b2c1b4568f539a6b8b651d1ca7e0d0b9d",
+    "content_sha256": "6f792719e131499fe4661a3d17b079d86ed247199387f8b66c9c59757699a787",
+    "metadata_sha256": "b88ff33f72619726df14f9fe24880a23ba0b246e9cfdeb207a14e8850b6380ff",
     "payload_sha256": "4b9a615b4532f2f7e557a93da462e4b92c171788e2c3ae3052fb6286f1183074",
     "aoi": "los_angeles_basin",
     "aoi_fingerprint": "89ce98e489",
@@ -72,8 +72,8 @@
         "published": "EPT copy built 2025-11-21 (collection CA_LosAngeles_1_B23; publisher release date not listed by TNM)"
       }
     ],
-    "code_commit": "923a081351bd0b7b8a8d288e03199e66af36dc32",
-    "dirty": true,
+    "code_commit": "7e8d468fd78beb259ef3e5adef429e997969d174",
+    "dirty": false,
     "building_height_m_p50_p90_p99_max": [
       9.7,
       23.8,
@@ -125,27 +125,27 @@
   ],
   "cached_artifacts": [
     {
-      "key": "urban_physics/los_angeles_basin/0d052816073d4866/payload.bin",
-      "path": "urban_physics/los_angeles_basin/0d052816073d4866/payload.bin",
+      "key": "urban_physics/los_angeles_basin/6f792719e131499f/payload.bin",
+      "path": "urban_physics/los_angeles_basin/6f792719e131499f/payload.bin",
       "bytes": 5818176,
       "sha256": "4b9a615b4532f2f7e557a93da462e4b92c171788e2c3ae3052fb6286f1183074",
-      "fetched_at": "2026-10-27T21:09:07Z",
+      "fetched_at": "2026-10-27T21:09:27Z",
       "url": "derived"
     },
     {
-      "key": "urban_physics/los_angeles_basin/0d052816073d4866/metadata.json",
-      "path": "urban_physics/los_angeles_basin/0d052816073d4866/metadata.json",
-      "bytes": 4030,
-      "sha256": "095052b77f820d76f16d4b0e250d387b2c1b4568f539a6b8b651d1ca7e0d0b9d",
-      "fetched_at": "2026-10-27T21:09:07Z",
+      "key": "urban_physics/los_angeles_basin/6f792719e131499f/metadata.json",
+      "path": "urban_physics/los_angeles_basin/6f792719e131499f/metadata.json",
+      "bytes": 4031,
+      "sha256": "b88ff33f72619726df14f9fe24880a23ba0b246e9cfdeb207a14e8850b6380ff",
+      "fetched_at": "2026-10-27T21:09:27Z",
       "url": "derived"
     },
     {
-      "key": "urban_physics/los_angeles_basin/0d052816073d4866/descriptor.json",
-      "path": "urban_physics/los_angeles_basin/0d052816073d4866/descriptor.json",
+      "key": "urban_physics/los_angeles_basin/6f792719e131499f/descriptor.json",
+      "path": "urban_physics/los_angeles_basin/6f792719e131499f/descriptor.json",
       "bytes": 360,
-      "sha256": "8e0cc6ce3beb50b5d0201df739fb3f2ae236229cd235c7d0cdca79d173b4f595",
-      "fetched_at": "2026-10-27T21:09:07Z",
+      "sha256": "2975dbde4db93b0d3ecc0ef56b0a20835c828238e80a986dec75bbe2c3dbd709",
+      "fetched_at": "2026-10-27T21:09:27Z",
       "url": "derived"
     },
     {
@@ -165,5 +165,5 @@
       "url": "https://usgs-lidar-public.s3.amazonaws.com/CA_LosAngeles_1_B23/ept.json"
     }
   ],
-  "generated_at": "2026-10-27T21:09:07Z"
+  "generated_at": "2026-10-27T21:09:27Z"
 }

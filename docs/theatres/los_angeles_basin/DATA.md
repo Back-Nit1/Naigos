@@ -258,11 +258,11 @@ Each class declares a notional role-based design range; the range equation solve
 Contract: [`docs/contracts/urban-obstacles-v1.md`](../../contracts/urban-obstacles-v1.md). This is the only urban geometry the simulation may collide with; the OpenStreetMap city layer below it in the viewer is presentation only and is never this.
 
 * physics box: -118.28..-118.215 E, 34.025..34.075 N (a sub-box of the AOI); grid 592 x 546 at 10 m, EPSG:32611; coverage 100.0%; 260,963 obstacle cells; tallest cell 310.2 m
-* schema `naigos.urban_obstacles` v1; content `0d052816073d4866a2f0109f1e07522576be5ef43374a1ccb3d21c066cb758ff`
-* metadata `095052b77f820d76f16d4b0e250d387b2c1b4568f539a6b8b651d1ca7e0d0b9d`
+* schema `naigos.urban_obstacles` v1; content `6f792719e131499fe4661a3d17b079d86ed247199387f8b66c9c59757699a787`
+* metadata `b88ff33f72619726df14f9fe24880a23ba0b246e9cfdeb207a14e8850b6380ff`
 * payload `4b9a615b4532f2f7e557a93da462e4b92c171788e2c3ae3052fb6286f1183074`
-* built from commit `923a081351bd0b7b8a8d288e03199e66af36dc32` (dirty tree: True) at 2026-10-27T21:09:07Z
-* cache: `data_cache/urban_physics/los_angeles_basin/0d052816073d4866/` (gitignored; a copy is committed under `tests/fixtures/urban_physics_root/`)
+* built from commit `7e8d468fd78beb259ef3e5adef429e997969d174` (dirty tree: False) at 2026-10-27T21:09:27Z
+* cache: `data_cache/urban_physics/los_angeles_basin/6f792719e131499f/` (gitignored; a copy is committed under `tests/fixtures/urban_physics_root/`)
 
 | source | product | licence | captured | published | retrieved | input sha256 |
 | --- | --- | --- | --- | --- | --- | --- |
