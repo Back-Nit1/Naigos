@@ -170,6 +170,31 @@ def test_live_simulation_carries_and_resets_recurrent_policy_memory():
     np.testing.assert_array_equal(np.asarray(sim.policy_memory), 0.0)
 
 
+def test_live_run_loop_resets_recurrent_memory_on_world_reroll():
+    """`run()` itself must call the reset, not just the helper."""
+    from naigos.demo.live import Simulation
+    from naigos.rl.ppo import PPOConfig, greedy_policy, init_learner
+
+    env = _env()
+    key = jax.random.PRNGKey(43)
+    _, obs = env.reset(key)
+    learner = init_learner(key, env.cfg, PPOConfig(policy_family="recurrent"), obs)
+    sim = Simulation(
+        env=env,
+        policy=greedy_policy(learner.actor.params, env.cfg, family="recurrent"),
+        georef=GeoRef(utm_epsg=32611, origin_easting_m=400_000.0,
+                      origin_northing_m=4_000_000.0),
+        speed=1e6,
+        reroll_s=1e-6,
+    )
+    calls, frames = [], []
+    real = sim._reset_policy_memory
+    sim._reset_policy_memory = lambda done_mask=None: (calls.append(done_mask), real(done_mask))
+    sim._publish = lambda *a, **k: (frames.append(1), len(frames) >= 2 and sim.stop())
+    sim.run()
+    assert any(c is None for c in calls), "world reroll did not clear GRU memory"
+
+
 # ------------------------------------------------------------------ server ---
 def test_live_frames_are_wellformed_and_geolocated(theatre):
     """Drive the Simulation directly -- no socket, no thread, no flake."""
