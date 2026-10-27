@@ -596,6 +596,45 @@ class NaigosEnv:
         """
         n_steps = n_steps or self.cfg.max_steps
 
+        # Recurrent policies advertise their fresh memory explicitly. Keep a
+        # separate scan signature so the long-standing stateless policy path
+        # below remains byte-for-byte compatible for demos and baselines.
+        initial_memory = getattr(policy, "initial_memory", None)
+        if initial_memory is not None:
+            def recurrent_body(carry, _):
+                state, obs, memory, k = carry
+                k, ka = jax.random.split(k)
+                action, memory = policy(obs, ka, memory)
+                if action_filter is None:
+                    feasible = jnp.ones((self.cfg.n_blue,), dtype=bool)
+                else:
+                    action, feasible = action_filter(state, obs, action)
+                state2, obs2, terms, done, info = self.step(state, action)
+                memory = jnp.where(
+                    (info["agent_done"] | done)[..., None],
+                    jnp.zeros_like(memory), memory,
+                )
+                out = {
+                    "pos": state2.air.pos, "psi": state2.air.psi,
+                    "gamma": state2.air.gamma, "phi": state2.air.phi,
+                    "speed": state2.air.speed, "alt_agl": info["alt_agl"],
+                    "alive": state2.alive, "reached": state2.reached,
+                    "action": action, "cbf_feasible": feasible,
+                    "terms": terms, "done": done,
+                    "threat_pos": state2.threats.pos,
+                    "threat_psi": state2.threats.psi,
+                    "lock": state2.lock, "firing": info["firing"],
+                }
+                return (state2, obs2, memory, k), out
+
+            k0, k1 = jax.random.split(key)
+            state, obs = self.reset(k0) if route is None else self.reset_route(k0, route)
+            (final, _, _, _), traj = jax.lax.scan(
+                recurrent_body, (state, obs, initial_memory, k1), None,
+                length=n_steps,
+            )
+            return final, traj
+
         def body(carry, _):
             state, obs, k = carry
             k, ka = jax.random.split(k)

@@ -303,6 +303,19 @@ def initial_memory(
     return jnp.zeros(shape, dtype=jnp.float32)
 
 
+def reset_memory(memory: jax.Array | None, done) -> jax.Array | None:
+    """Zero recurrent state for completed agent streams.
+
+    ``done`` has every leading dimension of ``memory`` except its hidden axis,
+    so this works for one aircraft, one world, or a batch of worlds.  Keeping
+    reset explicit prevents memory from crossing sortie/world boundaries.
+    """
+
+    if memory is None:
+        return None
+    return jnp.where(jnp.asarray(done, dtype=bool)[..., None], jnp.zeros_like(memory), memory)
+
+
 def _key(family: PolicyFamily | str, version: str) -> tuple[PolicyFamily, str]:
     try:
         normalized = PolicyFamily(family)
@@ -361,5 +374,6 @@ __all__ = [
     "create_actor",
     "get_policy_spec",
     "initial_memory",
+    "reset_memory",
     "registered_policies",
 ]
