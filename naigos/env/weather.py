@@ -23,6 +23,35 @@ WEATHER_RNG_STREAM_ID = 106
 TURBULENCE_MODEL_ID = "bounded-ar1-gust-v1"
 
 
+def _mix32(x):
+    """Small stateless integer mixer with identical NumPy/JAX implementations."""
+    x = jnp.asarray(x, dtype=jnp.uint32)
+    x = (x ^ (x >> jnp.uint32(16))) * jnp.uint32(0x7FEB352D)
+    x = (x ^ (x >> jnp.uint32(15))) * jnp.uint32(0x846CA68B)
+    return x ^ (x >> jnp.uint32(16))
+
+
+def counter_normal(stream_key: jax.Array, step_index, shape, substream: int = 0):
+    """Deterministic unit-variance pseudo-normal noise from a uint32 counter.
+
+    Six mixed uniforms minus their mean, scaled to unit variance. It is bounded
+    and intentionally simple enough for the independent NumPy verifier to
+    reproduce without importing JAX.
+    """
+    n = 1
+    for dim in shape:
+        n *= int(dim)
+    idx = jnp.arange(n, dtype=jnp.uint32)
+    base = (stream_key[0] ^ (stream_key[1] * jnp.uint32(0x9E3779B9))
+            ^ jnp.asarray(step_index, jnp.uint32) * jnp.uint32(0x85EBCA6B)
+            ^ jnp.uint32(substream * 0xC2B2AE35))
+    draws = []
+    for k in range(6):
+        word = _mix32(base + idx + jnp.uint32((k + 1) * 0x27D4EB2D))
+        draws.append((word.astype(jnp.float32) + 0.5) / jnp.float32(2**32))
+    return ((jnp.stack(draws, 0).sum(0) - 3.0) * jnp.sqrt(2.0)).reshape(shape)
+
+
 class WeatherState(NamedTuple):
     """Per-aircraft local truth and actor-visible estimates."""
 
@@ -119,7 +148,7 @@ def step(
     a = jnp.exp(-dt / jnp.maximum(tau, 1e-3))
     sigma = truth["turbulence_intensity"][:, None]
     key = jax.random.fold_in(state.stream_key, step_index.astype(jnp.uint32) + jnp.uint32(1))
-    innovation = jax.random.normal(jax.random.fold_in(key, 0), state.gust_enu.shape)
+    innovation = counter_normal(state.stream_key, step_index, state.gust_enu.shape, substream=0)
     gust = a * state.gust_enu + jnp.sqrt(jnp.maximum(1.0 - a * a, 0.0)) * sigma * innovation
     limit = cfg.gust_clip_sigma * sigma
     gust = jnp.where(sigma > 0.0, jnp.clip(gust, -limit, limit), 0.0)

@@ -708,6 +708,19 @@ class NaigosEnv:
             "ground_velocity": af_mod.ground_velocity(
                 air, weather.mean_wind_enu, weather.gust_enu
             ) if cfg.weather.enabled else af_mod.velocity(air),
+            "pos_before": state.air.pos,
+            "speed_before": state.air.speed,
+            "psi_before": state.air.psi,
+            "gamma_before": state.air.gamma,
+            "phi_before": state.air.phi,
+            "fuel_before": state.air.fuel,
+            "weather_altitude_input": state.air.pos[:, 2],
+            "weather_airspeed_input": state.air.speed,
+            "gust_before": state.weather.gust_enu,
+            "weather_stream_key": state.weather.stream_key,
+            "step_index_before": state.t,
+            "mission_stage_before": state.mission.current_stage,
+            "mission_dwell_before": state.mission.dwell_s,
         }
         return new_state, self.observe(new_state), terms, episode_done, info
 
@@ -876,8 +889,27 @@ class NaigosEnv:
             "mission_dwell_before": state.mission.dwell_s,
             "mission_dwell_after": state2.mission.dwell_s,
             "mission_outcome": state2.mission.outcome,
+            "mission_stage_pos": state2.mission.stage_pos,
+            "mission_stage_mask": state2.mission.stage_mask,
+            "mission_deadline_step": state2.mission.deadline_step,
+            "mission_completed": state2.mission.completed,
+            "mission_recovered": state2.mission.recovered,
+            "mission_failed": state2.mission.failed,
             "obstacle_clearance": info["obstacle_clearance"],
             "building_collision": info["building_collision"],
+            "pos_before": info["pos_before"],
+            "speed_before": info["speed_before"],
+            "psi_before": info["psi_before"],
+            "gamma_before": info["gamma_before"],
+            "phi_before": info["phi_before"],
+            "fuel_before_transition": info["fuel_before"],
+            "weather_altitude_input": info["weather_altitude_input"],
+            "weather_airspeed_input": info["weather_airspeed_input"],
+            "gust_before": info["gust_before"],
+            "weather_stream_key": info["weather_stream_key"],
+            "step_index_before": info["step_index_before"],
+            "mission_stage_before_transition": info["mission_stage_before"],
+            "mission_dwell_before_transition": info["mission_dwell_before"],
         }
         if memory is not None:
             ev["memory_before"], ev["memory_after"] = memory, memory_after
@@ -912,7 +944,9 @@ class NaigosEnv:
             "diversion_active": state2.resource.diversion_active,
             "objective": state2.objective,
             "bounds": state2.bounds,
-            "resource_observation": obs2.ego[:, -self.cfg.resource.observation_dim:]
+            "resource_observation": obs2.ego[:,
+                (14 if self.cfg.obs_edge_features else 10):
+                (14 if self.cfg.obs_edge_features else 10) + self.cfg.resource.observation_dim]
             if self.cfg.resource.enabled
             else jnp.zeros((self.cfg.n_blue, 0), dtype=obs2.ego.dtype),
             "action": action,
@@ -941,6 +975,23 @@ class NaigosEnv:
             "mission_outcome": state2.mission.outcome,
             "obstacle_clearance": info["obstacle_clearance"],
             "building_collision": info["building_collision"],
+            "pos_before": info["pos_before"],
+            "speed_before": info["speed_before"],
+            "psi_before": info["psi_before"],
+            "gamma_before": info["gamma_before"],
+            "phi_before": info["phi_before"],
+            "weather_altitude_input": info["weather_altitude_input"],
+            "weather_airspeed_input": info["weather_airspeed_input"],
+            "gust_before": info["gust_before"],
+            "weather_stream_key": info["weather_stream_key"],
+            "step_index_before": info["step_index_before"],
+            "mission_stage_pos": state2.mission.stage_pos,
+            "mission_stage_mask": state2.mission.stage_mask,
+            "mission_deadline_step": state2.mission.deadline_step,
+            "mission_recovered": state2.mission.recovered,
+            "fuel_before_transition": info["fuel_before"],
+            "mission_stage_before_transition": info["mission_stage_before"],
+            "mission_dwell_before_transition": info["mission_dwell_before"],
         }
 
     def rollout(self, key, policy, n_steps: int | None = None, action_filter=None, route=None, record: bool = False):
