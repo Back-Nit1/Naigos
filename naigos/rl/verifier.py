@@ -365,7 +365,13 @@ def _reward_cost_problems(terms, outcomes, weights: dict, reward, cost, tol: flo
     (S, B). Also proves each terminal outcome is paid or charged exactly once.
     """
     f = lambda name: np.asarray(getattr(terms, name), dtype=np.float64)  # noqa: E731
-    lost = np.clip(f("shotdown") + f("terrain_violation") + f("bounds_violation") + f("out_of_fuel"), 0.0, 1.0)
+    building = (f("building_collision") if hasattr(terms, "building_collision")
+                else np.zeros_like(f("shotdown")))
+    lost = np.clip(
+        f("shotdown") + building + f("terrain_violation") + f("bounds_violation") + f("out_of_fuel"),
+        0.0,
+        1.0,
+    )
     w = weights
     expected = (
         w["progress"] * f("progress") / 1_000.0 + w["arrived"] * f("arrived") + w["diverted"] * f("diverted")
@@ -382,7 +388,7 @@ def _reward_cost_problems(terms, outcomes, weights: dict, reward, cost, tol: flo
     # exactly-once: payments/charges happen on the step the exclusive outcome is set
     first = np.concatenate([np.zeros_like(outcomes[:1]), outcomes[:-1]], axis=0) == 0
     first &= outcomes != 0
-    for name, codes in (("arrived", (1,)), ("diverted", (2,)), ("loss", (3, 4, 5, 6))):
+    for name, codes in (("arrived", (1,)), ("diverted", (2,)), ("loss", (3, 4, 5, 6, 8))):
         flag = lost > 0 if name == "loss" else f(name) > 0
         if not np.array_equal(flag, first & np.isin(outcomes, codes)):
             problems.append(f"{name} term is not paid exactly once on the first matching terminal outcome")
@@ -519,18 +525,21 @@ def verify_resource_trace(
         arrived = np.asarray(terms.arrived[t], dtype=bool)
         shot = np.asarray(terms.shotdown[t], dtype=bool)
         terrain = np.asarray(terms.terrain_violation[t], dtype=bool)
+        building = np.asarray(getattr(terms, "building_collision", np.zeros_like(terms.shotdown))[t], dtype=bool)
         bounds = np.asarray(terms.bounds_violation[t], dtype=bool)
         gate_distance = np.linalg.norm(gates[t, ..., :2] - pos[t, :, None, :2], axis=-1)
         at_gate = np.any((gate_distance <= cfg.resource.gate_arrival_radius) & active[t], axis=-1)
-        expected_divert = at_gate & ~arrived & ~shot & ~terrain & ~bounds & ~dry & ~was_terminal
+        expected_divert = at_gate & ~arrived & ~shot & ~building & ~terrain & ~bounds & ~dry & ~was_terminal
         env_divert = np.asarray(terms.diverted[t], dtype=bool)
         if not np.array_equal(expected_divert, env_divert):
             mismatches.append(f"t={t}: diversion does not match first active-gate crossing")
 
         # Independent copy of the documented precedence (env.resource.
-        # OUTCOME_PRECEDENCE): shot > terrain > bounds > fuel > primary > divert.
+        # OUTCOME_PRECEDENCE): shot > building > terrain > bounds > fuel > primary > divert.
         new = np.zeros(agents, dtype=np.uint8)
-        for code, flag in ((2, expected_divert), (1, arrived), (6, dry), (5, bounds), (4, terrain), (3, shot)):
+        for code, flag in (
+            (2, expected_divert), (1, arrived), (6, dry), (5, bounds), (4, terrain), (8, building), (3, shot)
+        ):
             new[flag] = code
         timeout = (t + 1 >= cfg.max_steps) & ~was_terminal & (new == 0)
         new[timeout] = 7
@@ -562,7 +571,9 @@ def verify_resource_trace(
         mismatches += _reward_cost_problems(terms, outcomes, weights, reward, cost)
     lost = np.clip(
         sum(np.asarray(getattr(terms, n), dtype=np.float64)
-            for n in ("shotdown", "terrain_violation", "bounds_violation", "out_of_fuel")), 0.0, 1.0,
+            for n in ("shotdown", "terrain_violation", "building_collision", "bounds_violation", "out_of_fuel")),
+        0.0,
+        1.0,
     )
     return ResourceVerificationReport(
         steps=steps,

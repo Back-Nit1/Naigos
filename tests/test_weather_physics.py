@@ -19,6 +19,7 @@ from naigos.env.config import (
     WeatherConfig,
 )
 from naigos.env.flight_env import NaigosEnv
+from naigos.rl.train import baseline_policies, make_weather_conservative_policy
 
 
 def _weather(*, wind=(0.0, 0.0, 0.0), rho=1.0, sigma=0.0):
@@ -153,3 +154,23 @@ def test_weather_stream_is_reserved_and_does_not_move_resource_draws():
     np.testing.assert_array_equal(a.resource.reserve_fuel, b.resource.reserve_fuel)
     np.testing.assert_array_equal(a.resource.burn_multiplier, b.resource.burn_multiplier)
     np.testing.assert_array_equal(a.threats.pos, b.threats.pos)
+
+
+def test_weather_baseline_uses_only_local_actor_features_and_composes_with_resource_slice():
+    cfg = _cfg(_weather(wind=(5.0, 12.0, 0.0), sigma=3.0)).replace(
+        resource=ResourceWorldConfig(model=RESOURCE_WORLD_L1)
+    )
+    env = NaigosEnv(cfg)
+    _, obs = env.reset(jax.random.PRNGKey(22))
+    policies = baseline_policies(cfg)
+    assert {"direct", "avoid_nap", "reserve_divert", "weather_conservative"} <= set(policies)
+    for policy in policies.values():
+        action = policy(obs, jax.random.PRNGKey(0))
+        assert action.shape == (cfg.n_blue, 3) and np.isfinite(np.asarray(action)).all()
+
+    policy = make_weather_conservative_policy(cfg)
+    base = (14 if cfg.obs_edge_features else 10) + cfg.resource.observation_dim
+    changed = obs._replace(ego=obs.ego.at[:, base + 1].add(0.5))
+    original_action = policy(obs, jax.random.PRNGKey(0))
+    changed_action = policy(changed, jax.random.PRNGKey(999))
+    assert not np.array_equal(np.asarray(original_action[:, 0]), np.asarray(changed_action[:, 0]))

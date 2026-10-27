@@ -25,6 +25,8 @@ def _outcome(**flags):
     "flags, expected",
     [
         ({"shot": 1, "terrain": 1, "bounds": 1, "dry": 1}, R.OUTCOME_SHOTDOWN),
+        ({"shot": 1, "building": 1, "terrain": 1}, R.OUTCOME_SHOTDOWN),
+        ({"building": 1, "terrain": 1, "bounds": 1}, R.OUTCOME_BUILDING),
         ({"terrain": 1, "bounds": 1, "dry": 1}, R.OUTCOME_TERRAIN),
         ({"bounds": 1, "dry": 1}, R.OUTCOME_BOUNDS),
         ({"dry": 1, "timeout": 1}, R.OUTCOME_FUEL),

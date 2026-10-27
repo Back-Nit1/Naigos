@@ -20,6 +20,7 @@ from naigos.env.config import (
     TerrainConfig,
 )
 from naigos.env.flight_env import NaigosEnv
+from naigos.rl.train import rollout_metrics
 
 
 def _cfg(family, **kw):
@@ -135,3 +136,47 @@ def test_mission_stream_does_not_move_resource_or_threat_draws_and_env_jits():
 def test_recovery_family_fails_closed_without_endurance_resource():
     with pytest.raises(ValueError, match="requires the endurance"):
         NaigosEnv(EnvConfig(mission=_cfg("recovery")))
+
+
+def test_mission_metrics_keep_timeout_completion_recovery_and_survival_distinct():
+    cfg = EnvConfig(
+        n_blue=1,
+        n_threat=2,
+        n_threat_active=0,
+        k_friend_obs=1,
+        max_steps=1,
+        terrain=TerrainConfig(nx=16, ny=16, cell=1_000.0),
+        detection=DetectionConfig(los_samples=8),
+        resource=ResourceWorldConfig(model=RESOURCE_WORLD_L1),
+        mission=_cfg("transit", deadline_s=2.0),
+    )
+    env = NaigosEnv(cfg)
+    policy = lambda obs, key: jnp.zeros((1, 3))  # noqa: E731
+    final, traj = jax.vmap(lambda key: env.rollout(key, policy))(
+        jax.random.split(jax.random.PRNGKey(31), 2)
+    )
+    metrics = rollout_metrics(final, traj, 2, 1)
+    assert metrics["timeout_rate"] == 1.0
+    assert metrics["survival_rate"] == 0.0
+    assert metrics["primary_mission_completion_rate"] == 0.0
+    assert metrics["safe_diversion_recovery_rate"] == 0.0
+    assert metrics["joint_mission_survival_rate"] == 0.0
+    for name in (
+        "building_collision_rate", "mission_duration_s", "route_length_m", "fuel_used_kg",
+        "stall_envelope_rate", "max_gust_mps", "cbf_intervention_rate",
+        "cbf_authority_exceedance_rate",
+    ):
+        assert np.isfinite(metrics[name])
+
+    # Even a log claiming primary completion is not joint success after loss.
+    tampered = final._replace(
+        alive=jnp.zeros_like(final.alive),
+        mission=final.mission._replace(completed=jnp.ones_like(final.mission.completed)),
+        resource=final.resource._replace(
+            outcome=jnp.full_like(final.resource.outcome, resource.OUTCOME_PRIMARY)
+        ),
+    )
+    separated = rollout_metrics(tampered, traj, 2, 1)
+    assert separated["primary_mission_completion_rate"] == 1.0
+    assert separated["survival_rate"] == 0.0
+    assert separated["joint_mission_survival_rate"] == 0.0

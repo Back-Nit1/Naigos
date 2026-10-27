@@ -925,6 +925,8 @@ class NaigosEnv:
         backward-compatible alias of `action_executed`.
         """
         return {
+            "dt_s": jnp.float32(self.cfg.dt),
+            "mission_enabled": jnp.bool_(self.cfg.mission.enabled),
             "pos": state2.air.pos,
             "psi": state2.air.psi,
             # attitude state the airframe integrated, logged as-is so a
