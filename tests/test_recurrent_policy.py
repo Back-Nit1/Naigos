@@ -174,4 +174,3 @@ def test_metadata_free_checkpoint_migrates_only_as_deepsets_v1():
         assert "deepsets@1" in str(exc) and "recurrent@1" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("legacy DeepSets checkpoint accepted as recurrent")
-
