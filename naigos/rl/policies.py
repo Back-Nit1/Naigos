@@ -22,6 +22,9 @@ implementation.
 from __future__ import annotations
 
 import math
+import dataclasses
+import hashlib
+import json
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, Literal, Mapping, TypeAlias
@@ -31,7 +34,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 
 from ..env.config import BLUE_ACTION_NAMES, EnvConfig
-from .networks import Actor
+from .networks import Actor, RecurrentActor
 
 Axis: TypeAlias = int | str
 DTypeName: TypeAlias = Literal["float32", "bool"]
@@ -48,6 +51,8 @@ class PolicyFamily(str, Enum):
 
 DEFAULT_POLICY_FAMILY = PolicyFamily.DEEPSETS
 DEFAULT_POLICY_VERSION = "1"
+RECURRENT_POLICY_VERSION = "1"
+RECURRENT_HIDDEN = 128
 
 
 @dataclass(frozen=True)
@@ -102,6 +107,25 @@ class PolicySpec:
     action_contract: ActionContract
     checkpoint_parameter_key: str
     requires_critic_at_deployment: bool
+
+    def to_dict(self) -> dict:
+        """Stable JSON-compatible identity stored in run/checkpoint metadata."""
+
+        def encode(value):
+            if isinstance(value, Enum):
+                return value.value
+            if dataclasses.is_dataclass(value):
+                return {f.name: encode(getattr(value, f.name)) for f in dataclasses.fields(value)}
+            if isinstance(value, tuple):
+                return [encode(item) for item in value]
+            return value
+
+        return encode(self)
+
+    @property
+    def sha256(self) -> str:
+        payload = json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":")).encode()
+        return hashlib.sha256(payload).hexdigest()
 
 
 class PolicyNotRegisteredError(ValueError):
@@ -214,6 +238,40 @@ def _deepsets_spec(cfg: EnvConfig) -> PolicySpec:
     )
 
 
+def _recurrent_parameter_count(cfg: EnvConfig) -> int:
+    memory = jax.ShapeDtypeStruct((cfg.n_blue, RECURRENT_HIDDEN), jnp.float32)
+    variables = jax.eval_shape(
+        RecurrentActor(cfg, hidden=RECURRENT_HIDDEN).init,
+        jax.random.PRNGKey(0),
+        *_actor_input_shapes(cfg),
+        memory,
+    )
+    return count_parameters(variables["params"])
+
+
+def _recurrent_spec(cfg: EnvConfig) -> PolicySpec:
+    base = _deepsets_spec(cfg)
+    return dataclasses.replace(
+        base,
+        family=PolicyFamily.RECURRENT,
+        version=RECURRENT_POLICY_VERSION,
+        parameter_count=_recurrent_parameter_count(cfg),
+        memory_requirements=MemoryRequirements(
+            recurrent=True,
+            state_tensors=(
+                TensorContract(
+                    "memory",
+                    (cfg.n_blue, RECURRENT_HIDDEN),
+                    "float32",
+                    "one GRU-128 state per aircraft",
+                ),
+            ),
+            persistent_bytes_per_agent=RECURRENT_HIDDEN * 4,
+            reset_on_episode=True,
+        ),
+    )
+
+
 def _definitions() -> Mapping[tuple[PolicyFamily, str], _PolicyDefinition]:
     """Return built-ins without mutating process-global registration state."""
 
@@ -221,8 +279,28 @@ def _definitions() -> Mapping[tuple[PolicyFamily, str], _PolicyDefinition]:
         (PolicyFamily.DEEPSETS, DEFAULT_POLICY_VERSION): _PolicyDefinition(
             actor_factory=Actor,
             spec_factory=_deepsets_spec,
-        )
+        ),
+        (PolicyFamily.RECURRENT, RECURRENT_POLICY_VERSION): _PolicyDefinition(
+            actor_factory=lambda cfg: RecurrentActor(cfg, hidden=RECURRENT_HIDDEN),
+            spec_factory=_recurrent_spec,
+        ),
     }
+
+
+def initial_memory(
+    cfg: EnvConfig,
+    *,
+    family: PolicyFamily | str = DEFAULT_POLICY_FAMILY,
+    version: str = DEFAULT_POLICY_VERSION,
+    batch_shape: tuple[int, ...] = (),
+) -> jax.Array | None:
+    """Fresh deployable memory; ``None`` is the feed-forward lifecycle."""
+
+    spec = get_policy_spec(cfg, family=family, version=version)
+    if not spec.memory_requirements.recurrent:
+        return None
+    shape = tuple(int(x) for x in batch_shape) + (cfg.n_blue, RECURRENT_HIDDEN)
+    return jnp.zeros(shape, dtype=jnp.float32)
 
 
 def _key(family: PolicyFamily | str, version: str) -> tuple[PolicyFamily, str]:
@@ -271,6 +349,8 @@ __all__ = [
     "ActionContract",
     "DEFAULT_POLICY_FAMILY",
     "DEFAULT_POLICY_VERSION",
+    "RECURRENT_HIDDEN",
+    "RECURRENT_POLICY_VERSION",
     "MemoryRequirements",
     "ObservationContract",
     "PolicyFamily",
@@ -280,5 +360,6 @@ __all__ = [
     "count_parameters",
     "create_actor",
     "get_policy_spec",
+    "initial_memory",
     "registered_policies",
 ]
