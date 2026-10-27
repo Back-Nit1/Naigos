@@ -590,3 +590,94 @@ def test_make_train_without_record_returns_three_values():
     assert len(make_train(env, ppo, RewardWeights())(learner, roll, jax.random.PRNGKey(3))) == 3
     out = make_train(env, ppo, RewardWeights(), record=True)(learner, roll, jax.random.PRNGKey(3))
     assert len(out) == 4 and out[3]["action_requested"].shape[:2] == (ppo.n_steps, ppo.n_envs)
+
+
+# --- the other real-rollout entry points ------------------------------------------
+
+
+def _small(resource_name, policy_name):
+    c = _Cell(resource_name, policy_name, None)
+    return c
+
+
+def test_route_bank_writes_one_dataset_per_scenario_and_keeps_metrics(tmp_path):
+    from naigos.env import config as env_config
+    from naigos.rl.train import evaluate_route_bank
+
+    c = _small("baseline-v0", "deepsets")
+    rows = [r for r in env_config.route_bank() if r.split == "heldout"]
+    plain = evaluate_route_bank(c.env, c.pol, splits=("heldout",))
+    rec = evaluate_route_bank(
+        c.env, c.pol, splits=("heldout",), recording=_rec(tmp_path, chunk_steps=64), record_policy=c.identity,
+        record_index=tmp_path / "idx.json",
+    )
+    assert plain == rec
+    index = json.loads((tmp_path / "idx.json").read_text())["datasets"]
+    assert len(index) == len(rows) and all(d["complete"] for d in index)
+    seeds = {TrajectoryReader(d["path"]).metadata.provenance.seed for d in index}
+    assert seeds == {r.seed for r in rows}  # one seed / route per dataset, never mixed
+    with pytest.raises(trec.RecordingError):
+        evaluate_route_bank(c.env, c.pol, splits=("heldout",), recording=_rec(tmp_path / "x"))
+
+
+def test_resource_bank_datasets_carry_each_scenarios_resource_config(tmp_path):
+    from naigos.env.resource_bank import resource_bank
+    from naigos.rl.train import evaluate_resource_bank
+
+    c = _small("l1-endurance", "gru")
+    rows = list(resource_bank("heldout"))
+    plain = evaluate_resource_bank(c.env, c.pol, splits=("heldout",))
+    rec = evaluate_resource_bank(
+        c.env, c.pol, splits=("heldout",), recording=_rec(tmp_path), record_policy=c.identity,
+        record_index=tmp_path / "idx.json",
+    )
+    assert plain["verified"] and rec["verified"] and plain["heldout"] == rec["heldout"]
+    index = json.loads((tmp_path / "idx.json").read_text())["datasets"]
+    assert len(index) == len(rows) and all(d["complete"] for d in index)
+    by_seed = {r.seed: r for r in rows}
+    for d in index:
+        reader = TrajectoryReader(d["path"])
+        prov = reader.metadata.provenance
+        row = by_seed[prov.seed]
+        assert prov.environment_configuration["env"]["resource"]["burn_multiplier"] == pytest.approx(
+            [row.burn_multiplier] * 2
+        )
+        data = reader.read_all()
+        np.testing.assert_allclose(data["privileged/burn_multiplier"], row.burn_multiplier, rtol=1e-6)
+        assert prov.environment_configuration["resource_bank"]["bank_sha256"]
+
+
+def test_replay_run_records_only_the_trained_policy(tmp_path):
+    from naigos.demo import replay
+
+    c = _small("baseline-v0", "deepsets")
+    plain = replay.run(c.env, c.params, 2, 7)
+    rec = replay.run(c.env, c.params, 2, 7, recording=_rec(tmp_path), record_index=tmp_path / "idx.json")
+    assert {k: v["summary"] for k, v in plain.items()} == {k: v["summary"] for k, v in rec.items()}
+    index = json.loads((tmp_path / "idx.json").read_text())["datasets"]
+    assert [d["label"] for d in index] == ["replay-trained"] and index[0]["complete"]
+    assert TrajectoryReader(index[0]["path"]).metadata.provenance.policy.artifact_sha256 == trec.params_sha256(c.params)
+
+
+def test_pipeline_evaluation_records_the_candidate(tmp_path):
+    from naigos.pipeline import evaluation as pe
+
+    c = _small("baseline-v0", "deepsets")
+    plan = {"worlds_per_seed": 2, "seeds": [11], "use_cbf": False, "verifier_episodes": 0, "training_seeds": []}
+    loaded = pe.LoadedActor(params=c.params, family="deepsets", version="1")
+    plain = pe.run_evaluation(c.env, plan, loaded)
+    rec = pe.run_evaluation(c.env, plan, loaded, recording=_rec(tmp_path), record_index=tmp_path / "idx.json")
+    assert plain["candidate"] == rec["candidate"] and plain["baselines"] == rec["baselines"]
+    index = json.loads((tmp_path / "idx.json").read_text())["datasets"]
+    assert [d["label"] for d in index] == ["pipeline-candidate"]
+
+
+def test_cli_flags_are_opt_in():
+    import argparse
+
+    p = argparse.ArgumentParser()
+    trec.add_cli_args(p)
+    assert trec.config_from_args(p.parse_args([])) is None
+    cfg = trec.config_from_args(p.parse_args(["--record-trajectories", "--record-chunk-steps", "32"]))
+    assert cfg.enabled and cfg.root is None and cfg.chunk_steps == 32
+    assert trec.config_from_args(p.parse_args(["--record-trajectories", "/x"])).root == "/x"
