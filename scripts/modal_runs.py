@@ -39,6 +39,7 @@ it reaches a terminal.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import shutil
 import subprocess
@@ -271,6 +272,9 @@ def _relaunch_from(existing_meta: dict, run_name: str) -> tuple:
            ("iterations", "n_envs", "n_steps", "n_threat", "n_blue", "cell_m",
             "eval_every", "eval_worlds", "checkpoint_every")},
     )
+    prof = runmeta.RunProfile(
+        **{**prof.as_dict(), "overrides": tuple(cfg.get("overrides") or ())}
+    )
     code = runmeta.git_info(REPO)
     meta = runmeta.build_metadata(
         prof,
@@ -282,6 +286,13 @@ def _relaunch_from(existing_meta: dict, run_name: str) -> tuple:
         code=code,
         launcher="modal",
     )
+    # Matrix launches add a fully resolved experiment record to the immutable
+    # config identity.  A resume must carry that record forward verbatim: it is
+    # not reconstructible from the generic resume CLI and dropping it would let
+    # resume_compatibility approve work that write_metadata later rejects after
+    # a paid worker has already started.
+    if "experiment" in cfg:
+        meta["config"]["experiment"] = copy.deepcopy(cfg["experiment"])
     return prof, code, meta
 
 

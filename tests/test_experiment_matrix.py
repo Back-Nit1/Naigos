@@ -119,6 +119,32 @@ def test_run_metadata_makes_every_experiment_axis_immutable(tmp_path):
         runmeta.write_metadata(tmp_path, changed)
 
 
+def test_matrix_resume_preserves_and_compares_the_full_experiment_identity(monkeypatch):
+    modal_runs = _load_script("modal_runs")
+    plan = em.build_plan(
+        _config(
+            theatres=["owens_valley"], seeds=[0],
+            hyperparameters=[{"name": "default", "profile_overrides": {}}],
+        ),
+        code=CODE,
+    )
+    recorded = em.experiment_metadata(plan["experiments"][0], plan)
+    monkeypatch.setattr(runmeta, "git_info", lambda _repo: CODE)
+
+    _profile, _code, requested = modal_runs._relaunch_from(
+        recorded, recorded["run_name"]
+    )
+    assert requested["config"]["experiment"] == recorded["config"]["experiment"]
+    assert runmeta.identity(requested) == runmeta.identity(recorded)
+    assert runmeta.resume_compatibility(recorded, requested)["ok"]
+
+    changed = json.loads(json.dumps(requested))
+    changed["config"]["experiment"]["scenario_suite"]["sha256"] = "0" * 64
+    verdict = runmeta.resume_compatibility(recorded, changed)
+    assert not verdict["ok"]
+    assert "config.experiment" in verdict["changes"]
+
+
 def test_unsupported_cells_can_be_planned_but_never_mislabeled_as_submittable():
     plan = em.build_plan(_config(
         theatres=["owens_valley"], seeds=[0],

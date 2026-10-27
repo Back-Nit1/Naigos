@@ -1135,6 +1135,10 @@ RESUME_BLOCKING_KEYS = (
     "config.obs_edge_features",
     "config.plateau",
     "config.block_iterations",
+    # Model-ladder matrices resolve policy/resource/scenario contracts into one
+    # nested immutable record.  Comparing the whole record is deliberate: the
+    # generic resume CLI cannot faithfully reconstruct any of its subfields.
+    "config.experiment",
     # Not a `run.json` field: the curricula live in code, so only a code change
     # can move them. Named here so it is a legal `--override-resume` key and so
     # `naigos.rl.checkpoint` and this module share one vocabulary.
