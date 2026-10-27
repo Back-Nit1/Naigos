@@ -126,6 +126,7 @@ class VerificationReport:
     mean_exposure: float
     max_pd_error: float
     mismatches: list[str]
+    raw_loss_events: int = 0  # L1: loss flags before exclusive-outcome precedence
 
     @property
     def ok(self) -> bool:
@@ -181,6 +182,7 @@ def verify_trace(
     reached = np.zeros(B, dtype=bool)
     diverted = np.zeros(B, dtype=bool)
     prev_alive = np.ones(B, dtype=bool)
+    raw_losses = cost_units = 0
 
     for s in range(S):
         live = prev_alive & ~reached & ~diverted
@@ -215,8 +217,6 @@ def verify_trace(
         ceil_v = (pos[s][:, 2] >= af.ceiling - 1e-3) & live
         dwell_v = np.any(in_env & (lock > 0.05), axis=0) & live
 
-        terr += int(terr_v.sum())
-        bounds += int(oob_v.sum())
         ceil += int(ceil_v.sum())
         dwell_steps += int(dwell_v.sum())
 
@@ -224,9 +224,24 @@ def verify_trace(
         died = prev_alive & ~now_alive
         dry_v = np.asarray(terms.out_of_fuel[s], dtype=bool) if cfg.resource.enabled else np.zeros(B, bool)
         divert_v = np.asarray(traj.get("diverted", np.zeros_like(alive))[s], dtype=bool) & ~diverted
-        killed_by_fire = died & ~terr_v & ~oob_v & ~dry_v
+        if cfg.resource.enabled:
+            # Exclusive first outcome, same precedence as env.resource.OUTCOME_PRECEDENCE
+            # (shot > terrain > bounds > fuel); raw simultaneous flags are kept as evidence.
+            killed_by_fire = np.asarray(terms.shotdown[s], dtype=bool) & live
+            terr_x = terr_v & ~killed_by_fire
+            oob_x = oob_v & ~killed_by_fire & ~terr_x
+            dry_x = dry_v & ~killed_by_fire & ~terr_x & ~oob_x
+            raw_losses += int(killed_by_fire.sum() + terr_v.sum() + oob_v.sum() + dry_v.sum())
+            if not np.array_equal(died, killed_by_fire | terr_x | oob_x | dry_x):
+                mismatches.append(f"t={s}: alive transition does not match the exclusive loss outcome")
+            cost_units += int(died.sum())
+        else:
+            terr_x, oob_x, dry_x = terr_v, oob_v, dry_v
+            killed_by_fire = died & ~terr_v & ~oob_v & ~dry_v
+        terr += int(terr_x.sum())
+        bounds += int(oob_x.sum())
         shoot += int(killed_by_fire.sum())
-        fuel_losses += int(dry_v.sum())
+        fuel_losses += int(dry_x.sum())
         diversions += int(divert_v.sum())
 
         # A kill can only be logged where a threat actually had a firing
@@ -263,7 +278,8 @@ def verify_trace(
     # is reported separately as a diagnostic, not summed in.
     total_cost = float(shoot + terr + bounds)
     if cfg.resource.enabled:
-        total_cost += float(fuel_losses)
+        # one unit per lost aircraft, however many loss flags fired together
+        total_cost = float(cost_units)
     return VerificationReport(
         steps=S,
         shootdowns=shoot,
@@ -277,6 +293,7 @@ def verify_trace(
         mean_exposure=pd_sum / max(pd_n, 1),
         max_pd_error=max_pd_err,
         mismatches=mismatches,
+        raw_loss_events=raw_losses,
     )
 
 
@@ -290,10 +307,88 @@ class ResourceVerificationReport:
     max_fuel_error: float
     max_observation_error: float
     mismatches: list[str]
+    total_cost: float = 0.0  # exclusive losses; equals reward.constraint_cost summed
 
     @property
     def ok(self) -> bool:
         return not self.mismatches
+
+
+_LATENTS = ("initial_fuel", "reserve_fuel", "burn_multiplier", "diversion_pos", "diversion_active", "objective")
+
+
+def _latent_problems(cfg: EnvConfig, traj: dict[str, Any], start, tol: float = 1e-3) -> list[str]:
+    """Episode latents/gates must be constant in time and drawn inside the configured ranges."""
+    problems = []
+    for name in _LATENTS:
+        a = np.asarray(traj[name], dtype=np.float64)
+        if np.ptp(a, axis=0).max(initial=0.0) > 0.0:
+            problems.append(f"{name} changes during the episode")
+    if start is None:
+        return problems
+    af, rc = cfg.airframe, cfg.resource
+    start = np.asarray(start, dtype=np.float64)
+    objective = np.asarray(traj["objective"], dtype=np.float64)[0]
+    throttle = np.clip((af.v_init - af.v_stall) / (af.v_max - af.v_stall), 0.0, 1.0)
+    direct_fuel = (
+        np.linalg.norm(objective[:, :2] - start[:, :2], axis=-1) / af.v_init
+        * (af.burn_base + af.burn_throttle * throttle)
+    )
+    draws = {
+        "fuel_budget_ratio": np.asarray(traj["initial_fuel"], dtype=np.float64)[0] / direct_fuel,
+        "reserve_ratio": np.asarray(traj["reserve_fuel"], dtype=np.float64)[0] / direct_fuel,
+        "burn_multiplier": np.asarray(traj["burn_multiplier"], dtype=np.float64)[0],
+    }
+    for name, value in draws.items():
+        lo, hi = getattr(rc, name)
+        if np.any(value < lo * (1 - tol)) or np.any(value > hi * (1 + tol)):
+            problems.append(f"{name} {np.round(value, 4).tolist()} outside configured range [{lo}, {hi}]")
+    if not np.array_equal(np.asarray(traj["diversion_active"])[0], np.broadcast_to(rc.active_gate_mask, (len(start), len(rc.active_gate_mask)))):
+        problems.append("diversion_active differs from resource.active_gate_mask")
+    box = np.asarray(traj["bounds"], dtype=np.float64)
+    box = box[0] if box.ndim == 2 else box
+    gates = np.asarray(traj["diversion_pos"], dtype=np.float64)[0]
+    inside = (
+        (gates[..., 0] >= box[0]) & (gates[..., 0] <= box[1])
+        & (gates[..., 1] >= box[2]) & (gates[..., 1] <= box[3])
+    )
+    if not inside.all():
+        problems.append("a recovery gate lies outside the play area")
+    return problems
+
+
+def _reward_cost_problems(terms, outcomes, weights: dict, reward, cost, tol: float = 1e-3) -> list[str]:
+    """Recompute reward and CMDP cost in NumPy and compare with the production values.
+
+    ``weights`` is ``dataclasses.asdict(RewardWeights)``; ``reward``/``cost`` are the
+    unmasked ``reward.compute(terms, w)`` and ``reward.constraint_cost(terms)`` arrays
+    (S, B). Also proves each terminal outcome is paid or charged exactly once.
+    """
+    f = lambda name: np.asarray(getattr(terms, name), dtype=np.float64)  # noqa: E731
+    lost = np.clip(f("shotdown") + f("terrain_violation") + f("bounds_violation") + f("out_of_fuel"), 0.0, 1.0)
+    w = weights
+    expected = (
+        w["progress"] * f("progress") / 1_000.0 + w["arrived"] * f("arrived") + w["diverted"] * f("diverted")
+        - w["exposure"] * f("exposure") - w["lock"] * f("lock_level") - w["envelope"] * f("envelope_dwell")
+        - w["aircraft_loss"] * lost - w["fuel"] * f("fuel_used") - w["g_excess"] * np.maximum(f("g_excess"), 0.0)
+        - w["step_cost"] - w["ceiling"] * f("ceiling_violation") - w["stall"] * f("stall_violation")
+        - w["edge"] * f("edge_proximity")
+    )
+    problems = []
+    if reward is not None and np.abs(expected - np.asarray(reward, dtype=np.float64)).max() > tol:
+        problems.append("reward does not match the NumPy recomputation from RewardTerms")
+    if cost is not None and np.abs(lost - np.asarray(cost, dtype=np.float64)).max() > tol:
+        problems.append("CMDP cost does not match terminal-loss indicator")
+    # exactly-once: payments/charges happen on the step the exclusive outcome is set
+    first = np.concatenate([np.zeros_like(outcomes[:1]), outcomes[:-1]], axis=0) == 0
+    first &= outcomes != 0
+    for name, codes in (("arrived", (1,)), ("diverted", (2,)), ("loss", (3, 4, 5, 6))):
+        flag = lost > 0 if name == "loss" else f(name) > 0
+        if not np.array_equal(flag, first & np.isin(outcomes, codes)):
+            problems.append(f"{name} term is not paid exactly once on the first matching terminal outcome")
+    if lost.sum(axis=0).max(initial=0.0) > 1.0:
+        problems.append("an aircraft is charged CMDP cost more than once")
+    return problems
 
 
 def _resource_observation_numpy(cfg: EnvConfig, pos, psi, speed, fuel, objective,
@@ -343,7 +438,16 @@ def _resource_observation_numpy(cfg: EnvConfig, pos, psi, speed, fuel, objective
     return np.concatenate([scalar, gate.reshape(pos.shape[0], -1)], axis=-1)
 
 
-def verify_resource_trace(cfg: EnvConfig, traj: dict[str, Any], tol: float = 3e-3) -> ResourceVerificationReport:
+def verify_resource_trace(
+    cfg: EnvConfig,
+    traj: dict[str, Any],
+    tol: float = 3e-3,
+    *,
+    start=None,
+    weights: dict | None = None,
+    reward=None,
+    cost=None,
+) -> ResourceVerificationReport:
     """Verify L1 from logged state without importing JAX resource code.
 
     The log carries realized episode samples so this routine checks transitions,
@@ -453,6 +557,13 @@ def verify_resource_trace(cfg: EnvConfig, traj: dict[str, Any], tol: float = 3e-
         if not np.array_equal(diverted_log[t], expected_outcome == 2):
             mismatches.append(f"t={t}: cumulative diverted flag disagrees with outcome")
 
+    mismatches += _latent_problems(cfg, traj, start)
+    if weights is not None:
+        mismatches += _reward_cost_problems(terms, outcomes, weights, reward, cost)
+    lost = np.clip(
+        sum(np.asarray(getattr(terms, n), dtype=np.float64)
+            for n in ("shotdown", "terrain_violation", "bounds_violation", "out_of_fuel")), 0.0, 1.0,
+    )
     return ResourceVerificationReport(
         steps=steps,
         fuel_losses=fuel_losses,
@@ -460,4 +571,5 @@ def verify_resource_trace(cfg: EnvConfig, traj: dict[str, Any], tol: float = 3e-
         max_fuel_error=max_fuel_error,
         max_observation_error=max_obs_error,
         mismatches=mismatches,
+        total_cost=float(lost.sum()),
     )

@@ -663,8 +663,9 @@ def run(
     )
     if meta is not None:
         if env_cfg.resource.enabled:
-            from ..env.resource_bank import resource_protocol
+            from ..env.resource_bank import assert_resource_bank_disjoint, base_config_digest, resource_protocol
 
+            assert_resource_bank_disjoint([train_cfg.seed])
             meta = {
                 **meta,
                 "config": {
@@ -672,7 +673,7 @@ def run(
                     "environment_model_id": env_cfg.resource.model,
                     "observation_schema_id": ckpt.RESOURCE_OBSERVATION_SCHEMA,
                     "resource_config": dataclasses.asdict(env_cfg.resource),
-                    "resource_bank": resource_protocol(),
+                    "resource_bank": resource_protocol(base_config_digest(env_cfg, hmap)),
                 },
             }
         meta = {**meta, "runtime": {**(meta.get("runtime") or {}), **dev}}

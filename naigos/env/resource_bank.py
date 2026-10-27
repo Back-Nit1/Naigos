@@ -119,6 +119,48 @@ def config_for_scenario(cfg: EnvConfig, scenario: ResourceScenario) -> EnvConfig
     ))
 
 
+# Resource fields a bank row overrides; everything else in ``EnvConfig`` is the
+# base environment the bank was played on.
+_SCENARIO_RESOURCE_FIELDS = (
+    "fuel_budget_ratio", "reserve_ratio", "burn_multiplier", "active_gate_mask",
+)
+
+
+def base_config_digest(cfg: EnvConfig, hmap=None) -> str:
+    """SHA-256 of the base environment a bank row is applied to.
+
+    Covers the whole ``EnvConfig`` (airframe, terrain, detection, threats, ...)
+    except the per-scenario resource fields, plus the pinned DEM bytes when one
+    is supplied. Two evaluations with the same bank digest but different base
+    digests were not played on the same world.
+    """
+    doc = dataclasses.asdict(cfg)
+    for name in _SCENARIO_RESOURCE_FIELDS:
+        doc["resource"].pop(name, None)
+    h = hashlib.sha256(json.dumps(doc, sort_keys=True, separators=(",", ":"), default=str).encode())
+    if hmap is not None:
+        import numpy as np
+
+        arr = np.ascontiguousarray(np.asarray(hmap))
+        h.update(str(arr.shape).encode() + str(arr.dtype).encode() + arr.tobytes())
+    return h.hexdigest()
+
+
+def provenance_problems(cfg: EnvConfig, row: ResourceScenario, base_digest: str, hmap=None) -> list[str]:
+    """Why ``cfg`` is not exactly ``row`` applied to the recorded base environment."""
+    problems: list[str] = []
+    if row not in resource_bank(row.split):
+        problems.append(f"{row.scenario_id}: not a row of {RESOURCE_BANK_VERSION}/{row.split}")
+    base = RESOURCE_BANK_SEED_BASE.get(row.split)
+    if base is None or not base <= row.seed < base + RESOURCE_BANK_SEED_SPAN:
+        problems.append(f"{row.scenario_id}: seed {row.seed} is outside the reserved {row.split} range")
+    if cfg.resource != config_for_scenario(cfg, row).resource:
+        problems.append(f"{row.scenario_id}: env resource config differs from the bank record")
+    if base_config_digest(cfg, hmap) != base_digest:
+        problems.append(f"{row.scenario_id}: base environment digest differs from the recorded one")
+    return problems
+
+
 class ResourceBankOverlap(ValueError):
     pass
 
@@ -141,8 +183,9 @@ def assert_resource_bank_disjoint(training_seeds) -> None:
         )
 
 
-def resource_protocol() -> dict:
+def resource_protocol(base_digest: str | None = None) -> dict:
     return {
+        "base_config_sha256": base_digest,
         "environment_model_id": RESOURCE_WORLD_L1,
         "observation_schema_id": "L1EnduranceObservation-v1",
         "bank": RESOURCE_BANK_VERSION,
