@@ -307,11 +307,14 @@ def test_presentation_modules_import_nothing_from_the_simulation(rel):
     assert not bad, f"{rel} reaches into the simulation: {bad}"
 
 
-#: Words only the presentation layer may say. Alphanumeric edges, as in
-#: tests/test_imagery_layers.py, so an identifier like fetch_urban() is caught.
+#: Presentation-only vocabulary. ``urban`` by itself is no longer forbidden:
+#: the evidence-grade ``naigos.env.urban`` physics consumer is a separate,
+#: contracted namespace. Provider/presentation forms remain forbidden.
 PRESENTATION_WORDS = re.compile(
-    r"(?<![A-Za-z0-9])(ambience|urban|extru\w*|overpass|openstreetmap|osm|haze|smoke_column|smoke_plume|shimmer|"
-    r"atmosphere_profile|city|cities|conflict_ambience)(?![A-Za-z0-9])", re.IGNORECASE)
+    r"(?<![A-Za-z0-9])(ambience|urban[_ -]presentation|urban_mask|osm_urban|load_osm\w*|"
+    r"extru\w*|overpass|openstreetmap|osm|haze|smoke_column|smoke_plume|shimmer|"
+    r"atmosphere_profile|demo[./]cities|city_presentation|city_theme|conflict_ambience)"
+    r"(?![A-Za-z0-9])", re.IGNORECASE)
 
 
 @pytest.mark.parametrize("line", ["from naigos.demo.ambience import generate",

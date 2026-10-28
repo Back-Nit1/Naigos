@@ -253,7 +253,8 @@ def _make_feedforward_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeigh
                 # keeps its own episode's state. PPO has no CBF, hence
                 # requested == executed and every step is feasible.
                 evidence = env.evidence_frame(
-                    st, ob, act, act, jnp.ones((cfg.n_blue,), dtype=bool), st2, terms, done, info
+                    st, ob, act, act, jnp.ones((cfg.n_blue,), dtype=bool),
+                    jnp.zeros((cfg.n_blue,), dtype=jnp.uint16), st2, terms, done, info,
                 ) if record else None
                 # auto-reset: a finished world starts a fresh episode in place
                 # Carry the ending episode's own red_scales forward (next-steps.md
@@ -477,7 +478,8 @@ def _make_recurrent_train(env: NaigosEnv, ppo: PPOConfig, weights: RewardWeights
                 # or whose world resets, and stays zero while frozen.
                 mem2 = policies.reset_memory(mem2, agent_done_bool | ~live)
                 evidence = env.evidence_frame(
-                    st, ob, act, act, jnp.ones((cfg.n_blue,), dtype=bool), st2, terms, done, info,
+                    st, ob, act, act, jnp.ones((cfg.n_blue,), dtype=bool),
+                    jnp.zeros((cfg.n_blue,), dtype=jnp.uint16), st2, terms, done, info,
                     mem, mem2,
                 ) if record else None
                 st_r, ob_r = env.reset(kr, st.red_scales)
