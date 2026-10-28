@@ -12,6 +12,9 @@ research = [
   "py3dep>=0.16",
   "rasterio>=1.3",
   "xarray>=2023.1",
+  # LAZ decoding for the physics-grade urban obstacle build (naigos.research.sources.urban_physics).
+  # Imported only when a lidar tile is actually downloaded; a cached rerun never needs it.
+  "laspy[lazrs]>=2.5",
 ]
 data = ["numpy>=1.24", "rasterio>=1.3"]
 # orbax-checkpoint was already a transitive dependency of flax; naigos/rl/checkpoint.py
@@ -21,9 +24,12 @@ rl  = ["jax>=0.4.30", "flax>=0.8", "optax>=0.2", "distrax>=0.1.5", "orbax-checkp
 # available for exploratory plots; the shipped 3D replay uses a self-contained
 # three.js page and the live globe uses CesiumJS in the browser.
 demo = ["matplotlib>=3.8", "plotly>=5.20"]
+# Optional offline nonlinear validation boundary. Core PPO never imports this;
+# model/configuration bytes must also be supplied locally with pinned hashes.
+validation = ["jsbsim==1.2.3"]
 dev = ["pytest>=8.0"]
 # Everything needed to run the full suite and the demo in one go.
-all = ["naigos[research,data,rl,demo,dev]"]
+all = ["naigos[research,data,rl,demo,validation,dev]"]
 
 [project.scripts]
 naigos-research = "naigos.research.run:main"

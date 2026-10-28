@@ -30,9 +30,10 @@ def test_every_way_of_losing_the_airframe_costs_the_same():
     to dive into a ridge to break radar lock. A loss is a loss."""
     r_shot = float(compute(_terms(shotdown=1.0), W)[0])
     r_terr = float(compute(_terms(terrain_violation=1.0), W)[0])
+    r_building = float(compute(_terms(building_collision=1.0), W)[0])
     r_oob = float(compute(_terms(bounds_violation=1.0), W)[0])
     r_dry = float(compute(_terms(out_of_fuel=1.0), W)[0])
-    assert r_shot == r_terr == r_oob == r_dry
+    assert r_shot == r_terr == r_building == r_oob == r_dry
 
 
 def test_simultaneous_losses_are_not_double_counted():
@@ -120,7 +121,9 @@ def test_red_curriculum_promotes_on_survival_not_on_shootdown_rate():
 
     from naigos.rl import train
 
-    src = inspect.getsource(train.run)
+    # ``run`` is now the trajectory-recorder lifecycle wrapper; the curriculum
+    # update lives in the implementation it invokes.
+    src = inspect.getsource(train._run)
     assert "red_cur.update(level, survival_rate)" in src
     assert "1.0 - shootdown_rate" not in src
 

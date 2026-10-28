@@ -40,6 +40,8 @@ def _scoped_aoi_parameters(aoi) -> dict[str, Any]:
         "protected_zones": [z.as_dict() for z in aoi.protected_zones],
         "exclude_military_airfields": aoi.exclude_military_airfields,
         "scenario": aoi.scenario,
+        **({"urban_physics": {"bounds_wgs84": list(aoi.urban_physics.bounds),
+                              "cell_m": aoi.urban_physics.cell_m}} if aoi.urban_physics else {}),
         "definition_file": Path(aoi.definition_file).relative_to(cache.REPO_ROOT).as_posix()
         if Path(aoi.definition_file).is_relative_to(cache.REPO_ROOT) else Path(aoi.definition_file).name,
     }
@@ -162,6 +164,12 @@ def build(
             "CONUS-only. A non-US AOI must switch to the Copernicus GLO-30 fallback.",
         ],
     )))
+
+    # --- physics-grade urban obstacles (opt-in per theatre) ------------------------------
+    urban_lines: list[str] = []
+    if aoi.urban_physics is not None:
+        urban_path, urban_lines = _write_urban_obstacles_component(aoi, force, dem_npz.abs_path)
+        written.append(str(urban_path))
 
     # --- airfields ---------------------------------------------------------------------
     print("[2/6] airfields (OurAirports)", file=sys.stderr)
@@ -364,8 +372,114 @@ def build(
     )))
 
     write_data_doc(aoi, dem_summary, airfields, reconcile, profile, envelope, threats,
-                   out=data_doc)
+                   out=data_doc, extra_lines=urban_lines)
     return {"components": written, "artifacts": sorted(cache.load_manifest())}
+
+
+def _write_urban_obstacles_component(aoi, force: bool, dem_npz):
+    """Build the urban obstacle artifact and cite it as ``data.urban_obstacles``.
+
+    Separate from ``data.terrain_dem`` on purpose: the DEM is the terrain surface, this is the
+    structure surface, and a theatre with the block fails closed if this component or the
+    artifact it hashes is missing or corrupt (``naigos.data.theatre``).
+    """
+    from ..data import urban_obstacles as uo
+    from .sources import urban_physics
+
+    print("[1b/6] urban obstacles (physics-grade, docs/contracts/urban-obstacles-v1.md)", file=sys.stderr)
+    grid, path, stats, inputs = urban_physics.build_artifact(aoi, dem_npz, force=force)
+    m, h = grid.meta, grid.hashes
+    arts = []
+    for fname in (uo.PAYLOAD_FILE, uo.METADATA_FILE, uo.DESCRIPTOR_FILE):
+        f = path / fname
+        arts.append(cache.Artifact(
+            key=f"urban_physics/{aoi.name}/{h.content_id}/{fname}", source_key="usgs_3dep",
+            url="derived", path=f.relative_to(cache.cache_dir()).as_posix(), bytes=f.stat().st_size,
+            sha256=cache.sha256_bytes(f.read_bytes()), fetched_at=m.build.built_at,
+            license="derived from the cited sources", citation="see sources"))
+    keys = ["usgs_3dep", "usgs_3dep_lidar"] + (["nyc_building_footprints"] if aoi.name == "nyc_harbor" else [])
+    lines = _urban_doc_lines(aoi, grid, stats)
+    path_out = spec.write_component(
+        "data.urban_obstacles",
+        role="Physics-grade structure surface: the only urban geometry the env may collide with.",
+        inputs=["AOI urban_physics box", "USGS 3DEP bare-earth DEM", "USGS 3DEP lidar point cloud"]
+        + (["NYC Building Footprints"] if aoi.name == "nyc_harbor" else []),
+        outputs=["versioned immutable obstacle raster (ground, top, height, coverage, building, uncertainty)"],
+        decision=(
+            f"Rasterise structures to a {m.cell_m:g} m grid ({m.nx} x {m.ny}) inside the documented urban "
+            "physics box, keep coverage explicit, and refuse to run the theatre without it."
+        ),
+        rationale=(
+            "3DEP is a bare-earth surface, so cities are invisible to line of sight and collision without "
+            "a separate structure layer. Public-domain lidar gives measured structure tops; cells are "
+            "conservative (any structure in the cell blocks it) and unknown cells stay unknown rather "
+            "than becoming open air or zero-height buildings. Presentation geometry (OSM, provider tiles) "
+            "is a different cache namespace and never substitutes."
+        ),
+        source_keys=keys, artifacts=arts + inputs,
+        parameters={
+            "schema": uo.SCHEMA_ID, "schema_version": uo.SCHEMA_VERSION,
+            "content_sha256": h.content_sha256, "metadata_sha256": h.metadata_sha256,
+            "payload_sha256": h.payload_sha256,
+            "artifact_dir": path.relative_to(cache.cache_dir()).as_posix(),
+            "cell_m": m.cell_m, "nx": m.nx, "ny": m.ny,
+            "physics_bounds_wgs84": list(m.physics_bounds_wgs84), "utm_epsg": m.utm_epsg,
+            "env_origin_utm_m": list(m.env_origin_utm_m), "grid_origin_enu_m": list(m.grid_origin_enu_m),
+            "aoi_fingerprint": m.aoi_fingerprint,
+        },
+        evidence=stats,
+        invariants=[
+            "Loaded only through naigos.data.urban_obstacles.load_urban_obstacles with an ExpectedFrame.",
+            "A missing, partial or corrupt artifact is an error for this theatre; there is no fallback.",
+            "Unknown cells (coverage 0) are NaN, never zero-height buildings.",
+            "No OSM, provider-tile or screenshot-derived geometry enters this artifact.",
+        ],
+        caveats=[
+            "Lidar is a capture-date snapshot (see sources[].captured); it is not current conditions.",
+            "Structure heights are per-cell maxima at the stated resolution: thin spires and masts are "
+            "lower bounds, and a 10 m cell cannot resolve street canyons or building gaps narrower than a cell.",
+            "Point classification (building, bridge deck, ground) is the data provider's.",
+            "Protected-zone exclusions are no-data, so those areas are unknown rather than open.",
+        ],
+    )
+    return path_out, lines
+
+
+def _urban_doc_lines(aoi, grid, stats) -> list[str]:
+    """The urban-obstacle section of the theatre's generated DATA.md."""
+    m, h = grid.meta, grid.hashes
+    w, s_, e, n = m.physics_bounds_wgs84
+    out = [
+        "## Physics-grade urban obstacles", "",
+        "Contract: [`docs/contracts/urban-obstacles-v1.md`](../../contracts/urban-obstacles-v1.md). This is "
+        "the only urban geometry the simulation may collide with; the OpenStreetMap city layer below it "
+        "in the viewer is presentation only and is never this.", "",
+        f"* physics box: {w}..{e} E, {s_}..{n} N (a sub-box of the AOI); grid {m.nx} x {m.ny} at "
+        f"{m.cell_m:g} m, EPSG:{m.utm_epsg}; coverage {grid.coverage_fraction:.1%}; "
+        f"{grid.building_cells:,} obstacle cells; tallest cell {stats['max_height_agl_m']:.1f} m",
+        f"* schema `{uo_schema()}` v1; content `{h.content_sha256}`", f"* metadata `{h.metadata_sha256}`",
+        f"* payload `{h.payload_sha256}`",
+        f"* built from commit `{m.build.code_commit}` (dirty tree: {m.build.dirty}) at {m.build.built_at}",
+        f"* cache: `data_cache/urban_physics/{aoi.name}/{h.content_id}/` (gitignored; a copy is committed "
+        f"under `tests/fixtures/urban_physics_root/`)", "",
+        "| source | product | licence | captured | published | retrieved | input sha256 |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for src in m.sources:
+        out.append(f"| {src.name} | {src.product_id[:120]} | {src.licence} | {src.captured} | "
+                   f"{src.published} | {src.retrieved} | `{src.sha256[:16]}` |")
+    out += ["", "Cross-checks and counts:", ""]
+    for k, v in stats.items():
+        if k.startswith(("lidar", "cells_", "footprint", "building_height", "exclusion")):
+            out.append(f"* {k}: {v}")
+    out += ["", f"> {m.notes}", ""]
+    return out
+
+
+def uo_schema() -> str:
+    from ..data import urban_obstacles as uo
+
+    return uo.SCHEMA_ID
 
 
 def _write_imagery_component():
@@ -539,7 +653,7 @@ def refresh_source_sections() -> Path:
 
 
 def write_data_doc(aoi, dem_summary, airfields, reconcile, profile, envelope, threats,
-                   out: Path | None = None) -> None:
+                   out: Path | None = None, extra_lines: list[str] | None = None) -> None:
     """Render docs/DATA.md (or ``out``), the human-readable provenance log."""
     m = cache.load_manifest()
     lines = [
@@ -623,6 +737,8 @@ def write_data_doc(aoi, dem_summary, airfields, reconcile, profile, envelope, th
             f"{d['detection_range_km_pd50']:.0f} km | {d['detection_range_km_pd90']:.0f} km | "
             f"{d['lethal_range_km']:.0f} km | {en['reaction_latency_s']:.0f} s |"
         )
+    if extra_lines:
+        lines += extra_lines
     lines += ["", "## Scope guardrail", "", "```", GUARDRAIL.strip(), "```", ""]
 
     out = Path(out) if out is not None else cache.REPO_ROOT / "docs" / "DATA.md"

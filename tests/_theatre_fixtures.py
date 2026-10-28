@@ -29,6 +29,12 @@ def offline_theatre(aoi: str):
         dest = Path(tmp) / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(REPO / "tests" / "fixtures" / f"dem_{aoi}.npz", dest)
+        # A theatre that declares urban_physics also needs its (committed, hashed) obstacle
+        # artifact at the exact relative path its data.urban_obstacles component names.
+        up = REPO / "components" / "aoi" / aoi / "data.urban_obstacles.json"
+        if up.exists():
+            urel = json.loads(up.read_text())["parameters"]["artifact_dir"]
+            shutil.copytree(REPO / "tests" / "fixtures" / "urban_physics_root" / urel, Path(tmp) / urel)
         with research_roots(cache_dir=tmp):
             yield Path(tmp)
 

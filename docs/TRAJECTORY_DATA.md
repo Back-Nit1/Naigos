@@ -57,14 +57,17 @@ this transition, not a persistent state:
 | 5 | out of fuel |
 | 6 | timeout |
 | 7 | external reset |
+| 8 | building collision (urban-physics extension) |
 | 255 | other (must be explained by the producing dataset's configuration) |
 
 `status/alive` and `status/reached` are post-transition states. Thus an agent
 that reached its objective can be both alive and reached. A timeout can also
 leave it alive. A cause is nonzero only on the transition that created the
 terminal event. If several raw terminal indicators occur on one transition,
-the primary cause uses this fixed precedence:
-`terrain > out_of_bounds > shot_down > reached`. All raw indicators remain in
+the historical baseline primary cause uses its fixed precedence:
+`terrain > out_of_bounds > shot_down > reached`. The opt-in mission model uses
+its environment-versioned precedence and records the exclusive mission outcome
+as an extension; a building collision uses cause 8. All raw indicators remain in
 their separate `reward/*` arrays, so the primary code never discards the
 simultaneous evidence. Fuel exhaustion is currently a cost event rather than an
 automatic Naigos termination; code 5 is used only if a future environment
@@ -121,6 +124,33 @@ configuration may instead make the first exhaustion event terminal. The raw
 `reward/out_of_fuel`, status cause, environment configuration, and cost array
 make that distinction explicit; the format does not silently reinterpret one
 environment's semantics as the other's.
+
+### Weather, mission and urban evidence extension
+
+When the selected environment enables these capabilities, schema construction
+adds all of the following fields for every record; none is retrofitted into an
+old dataset:
+
+- actor-visible `extension/weather_observation` and
+  `extension/mission_observation`;
+- privileged mean wind, gust before/after, density, interpolation inputs,
+  turbulence components and named weather-stream key;
+- post-step air-relative and ground velocity;
+- mission stage/dwell before and after, deadline, fixed-shape stage geometry,
+  exclusive outcome, completion, recovery and failure;
+- evidence-grade obstacle clearance, pre-step position and raw
+  `reward/building_collision`;
+- `extension/cbf_reason_bits`, with terrain=1, urban=2, threat=4, bounds=8,
+  authority=16 and resource=32;
+- recurrent memory before/after/reset when the selected policy is recurrent.
+
+Immutable environment metadata pins the environment model, weather and
+turbulence config digests, urban obstacle digest/LOS schema, aircraft physics
+model, mission config/bank digests, named-stream version, policy/resource
+identity, commit and dirty state. The pure NumPy physics verifier reconstructs
+the transition evidence and rejects altered identities or values. Complete
+field definitions live in `naigos/rl/trajectory_recording.py`; the core schema
+retains its historical meanings.
 
 ### Optional privileged state and future resources
 

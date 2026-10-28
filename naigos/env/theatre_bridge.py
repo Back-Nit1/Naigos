@@ -180,6 +180,12 @@ def env_from_theatre(
         "geo_bounds": georef.corners(tcfg.extent_x, tcfg.extent_y),
         "utm_epsg": th.utm_epsg,
         "bbox_wgs84": th.bbox_wgs84,
+        # Physics evidence object, already hash/georeference validated by the
+        # theatre loader. Consumers pass this object to NaigosEnv only when the
+        # explicit urban physics model is selected. It is never a viewer tile.
+        "urban_obstacles": th.urban_obstacles,
+        "urban_obstacle_evidence": th.urban_obstacles.evidence() if th.urban_obstacles else None,
+        "env_origin_utm_m": (georef.origin_easting_m, georef.origin_northing_m),
         "grid": f"{grid.nx}x{grid.ny} @ {grid.cell_m:.0f} m = {tcfg.extent_x/1000:.1f} x {tcfg.extent_y/1000:.1f} km",
         "relief_m": (float(grid.heightmap.min()), float(grid.heightmap.max())),
         "threat_classes": [k.label for k in kinds],

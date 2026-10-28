@@ -73,6 +73,53 @@ ALLOWLIST: dict[str, Source] = {
             "NAIGOS_OPENTOPO_KEY. Used for AOIs outside 3DEP's CONUS footprint."
         ),
     ),
+    "usgs_3dep_lidar": Source(
+        key="usgs_3dep_lidar",
+        name="USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data)",
+        hosts=("usgs-lidar-public.s3.amazonaws.com", "tnmaccess.nationalmap.gov"),
+        license="Public domain (US Government work, USGS)",
+        license_url="https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits",
+        citation=(
+            "U.S. Geological Survey, 3D Elevation Program (3DEP) lidar point clouds, distributed as "
+            "Entwine Point Tiles in the usgs-lidar-public AWS open-data bucket; product dates from "
+            "the USGS National Map Access API."
+        ),
+        role=(
+            "Structure heights for the physics-grade urban obstacle artifact: the provider's "
+            "building and bridge-deck returns (or, where it classified no buildings, unclassified "
+            "surface returns) over its bare-earth returns. Physics evidence, unlike OSM."
+        ),
+        docs=("https://www.usgs.gov/3d-elevation-program", "https://usgs.entwine.io/"),
+        notes=(
+            "Fetched only by naigos.research.sources.urban_physics, bounded to a documented urban "
+            "physics box, and cached with a sha256 per tile. Point classification is the data "
+            "provider's, not ours; its accuracy is a stated limitation of every artifact."
+        ),
+    ),
+    "nyc_building_footprints": Source(
+        key="nyc_building_footprints",
+        name="NYC Building Footprints (NYC Open Data, DoITT/OTI)",
+        hosts=("data.cityofnewyork.us",),
+        license="NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source)",
+        license_url="https://www.nyc.gov/html/data/terms.html",
+        citation=(
+            "City of New York, Office of Technology and Innovation, Building Footprints "
+            "(NYC Open Data dataset 5zhs-2jue), derived from the city's 3D Building Model and "
+            "aerial lidar."
+        ),
+        role=(
+            "Authoritative footprints and roof heights for nyc_harbor's urban physics box, "
+            "reconciled with USGS 3DEP lidar. Dated source: the model is a capture-date snapshot, "
+            "never a statement about current conditions."
+        ),
+        attribution_required=True,
+        docs=("https://data.cityofnewyork.us/City-Government/Building-Footprints/5zhs-2jue",),
+        notes=(
+            "Only footprint geometry and roof height reach the artifact. No building identifier, "
+            "address, owner or use class is kept, so nothing in a scene or export identifies a "
+            "particular building."
+        ),
+    ),
     "ourairports": Source(
         key="ourairports",
         name="OurAirports",

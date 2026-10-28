@@ -19,6 +19,164 @@ RESOURCE_WORLD_L1 = "resource-world-v1/endurance"
 RESOURCE_WORLD_MODELS = (RESOURCE_WORLD_BASELINE, RESOURCE_WORLD_L1)
 N_DIVERSION_GATES = 2
 
+WEATHER_DISABLED = "weather-disabled-v0"
+WEATHER_AR1 = "bounded-ar1-weather-v1"
+WEATHER_MODELS = (WEATHER_DISABLED, WEATHER_AR1)
+ENV_VEHICLE_WEATHER = "resource-world-v1/vehicle-weather"
+ENV_URBAN_VEHICLE_WEATHER = "resource-world-v1/urban-vehicle-weather"
+
+MISSION_LEGACY = "legacy-objective-v0"
+MISSION_V1 = "procedural-mission-v1"
+MISSION_MODELS = (MISSION_LEGACY, MISSION_V1)
+MISSION_FAMILIES = ("transit", "multi_leg", "time_on_station", "survey_corridor", "recovery")
+URBAN_DISABLED = "urban-disabled-v0"
+URBAN_OBSTACLE_V1 = "urban-obstacle-physics-v1"
+URBAN_MODELS = (URBAN_DISABLED, URBAN_OBSTACLE_V1)
+
+
+@dataclass(frozen=True)
+class WeatherConfig:
+    """Immutable vertical weather profile consumed by the simulator.
+
+    This is normalized scenario data, never a live-weather interface.  The
+    profile is piecewise linear in altitude.  ``turbulence_intensity_mps`` is
+    the stationary one-sigma gust magnitude for the bounded AR(1) engineering
+    surrogate; ``scale_length_m`` determines its correlation time as L / TAS.
+    The schema deliberately leaves room for a future Dryden filter without
+    changing the public profile fields.
+    """
+
+    model: str = WEATHER_DISABLED
+    schema_version: int = 1
+    scenario_id: str = "neutral"
+    altitude_knots_m: tuple[float, ...] = (0.0, 12_000.0)
+    wind_enu_mps: tuple[tuple[float, float, float], ...] = ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
+    density_ratio: tuple[float, ...] = (1.0, 1.0)
+    temperature_k: tuple[float, ...] = (288.15, 216.65)
+    sensing_attenuation: tuple[float, ...] = (1.0, 1.0)
+    turbulence_intensity_mps: tuple[float, ...] = (0.0, 0.0)
+    scale_length_m: tuple[float, float, float] = (200.0, 200.0, 100.0)
+    gust_clip_sigma: float = 4.0
+    severity_scale: float = 1.0
+    estimate_noise_scale: float = 0.15
+
+    @property
+    def enabled(self) -> bool:
+        return self.model == WEATHER_AR1
+
+    @property
+    def observation_dim(self) -> int:
+        # local wind estimate in body axes (3), turbulence magnitude, density,
+        # and declared normalized uncertainty. No future profile values.
+        return 6 if self.enabled else 0
+
+
+def weather_problems(cfg: WeatherConfig) -> list[str]:
+    problems: list[str] = []
+    if cfg.model not in WEATHER_MODELS:
+        problems.append(f"weather.model {cfg.model!r} is not one of {WEATHER_MODELS}")
+    if cfg.schema_version != 1:
+        problems.append("weather.schema_version must be 1")
+    n = len(cfg.altitude_knots_m)
+    if n < 2 or any(b <= a for a, b in zip(cfg.altitude_knots_m, cfg.altitude_knots_m[1:])):
+        problems.append("weather.altitude_knots_m must contain at least two increasing knots")
+    for name in ("wind_enu_mps", "density_ratio", "temperature_k", "sensing_attenuation", "turbulence_intensity_mps"):
+        if len(getattr(cfg, name)) != n:
+            problems.append(f"weather.{name} must have one value per altitude knot")
+    if any(len(v) != 3 for v in cfg.wind_enu_mps):
+        problems.append("weather.wind_enu_mps entries must be ENU triples")
+    if any(v <= 0 for v in cfg.density_ratio):
+        problems.append("weather.density_ratio must be positive")
+    if any(v <= 0 for v in cfg.temperature_k):
+        problems.append("weather.temperature_k must be positive")
+    if any(v < 0 for v in cfg.turbulence_intensity_mps):
+        problems.append("weather.turbulence_intensity_mps must be non-negative")
+    if len(cfg.scale_length_m) != 3 or any(v <= 0 for v in cfg.scale_length_m):
+        problems.append("weather.scale_length_m must contain three positive values")
+    if cfg.gust_clip_sigma <= 0 or cfg.severity_scale < 0 or cfg.estimate_noise_scale < 0:
+        problems.append("weather gust/severity/noise scales must be non-negative with a positive clip")
+    return problems
+
+
+@dataclass(frozen=True)
+class MissionConfig:
+    """Opt-in bounded procedural mission state machine."""
+
+    model: str = MISSION_LEGACY
+    schema_version: int = 1
+    family: str = "transit"
+    scenario_id: str = "legacy"
+    max_stages: int = 4
+    stage_radius_m: float = 3_000.0
+    stage_vertical_half_m: float = 1_500.0
+    dwell_required_s: float = 60.0
+    deadline_s: float = 900.0
+    reveal_future_stages: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.model == MISSION_V1
+
+    @property
+    def observation_dim(self) -> int:
+        return 8 if self.enabled else 0
+
+
+def mission_problems(cfg: MissionConfig, resource: "ResourceWorldConfig") -> list[str]:
+    problems: list[str] = []
+    if cfg.model not in MISSION_MODELS:
+        problems.append(f"mission.model {cfg.model!r} is not one of {MISSION_MODELS}")
+    if cfg.schema_version != 1:
+        problems.append("mission.schema_version must be 1")
+    if cfg.family not in MISSION_FAMILIES:
+        problems.append(f"mission.family {cfg.family!r} is not one of {MISSION_FAMILIES}")
+    if cfg.max_stages < 1 or cfg.max_stages > 8:
+        problems.append("mission.max_stages must be in [1, 8]")
+    if cfg.stage_radius_m <= 0 or cfg.stage_vertical_half_m <= 0:
+        problems.append("mission stage radii must be positive")
+    if cfg.dwell_required_s <= 0 or cfg.deadline_s <= 0:
+        problems.append("mission dwell and deadline must be positive")
+    if cfg.enabled and cfg.family == "recovery" and not resource.enabled:
+        problems.append("mission family 'recovery' requires the endurance resource model")
+    if cfg.reveal_future_stages:
+        problems.append("mission.reveal_future_stages is not implemented; future stages stay hidden")
+    return problems
+
+
+@dataclass(frozen=True)
+class UrbanPhysicsConfig:
+    """Evidence-grade structure surface selection for the opt-in urban rung."""
+
+    model: str = URBAN_DISABLED
+    schema_version: int = 1
+    los_surface: str = "terrain_only"  # terrain_only | terrain_plus_urban
+    unknown_coverage: str = "terrain_only"
+    collision_samples: int = 128
+    capsule_radius_m: float = 3.0
+
+    @property
+    def enabled(self) -> bool:
+        return self.model == URBAN_OBSTACLE_V1
+
+
+def urban_problems(cfg: UrbanPhysicsConfig) -> list[str]:
+    problems: list[str] = []
+    if cfg.model not in URBAN_MODELS:
+        problems.append(f"urban.model {cfg.model!r} is not one of {URBAN_MODELS}")
+    if cfg.schema_version != 1:
+        problems.append("urban.schema_version must be 1")
+    if cfg.los_surface not in ("terrain_only", "terrain_plus_urban"):
+        problems.append("urban.los_surface must be terrain_only or terrain_plus_urban")
+    if cfg.enabled and cfg.los_surface != "terrain_plus_urban":
+        problems.append("the urban physics model requires terrain_plus_urban LOS")
+    if cfg.unknown_coverage != "terrain_only":
+        problems.append("urban.unknown_coverage currently supports only explicit terrain_only semantics")
+    if cfg.collision_samples < 2 or cfg.collision_samples > 512:
+        problems.append("urban.collision_samples must be in [2, 512]")
+    if cfg.capsule_radius_m < 0:
+        problems.append("urban.capsule_radius_m must be non-negative")
+    return problems
+
 # --- threat kinds -------------------------------------------------------------
 # Kinds are DATA, not an enum: the count and the parameters come from
 # `components/model.detection.json` via `naigos.env.theatre_bridge`, so the real
@@ -309,6 +467,9 @@ class EnvConfig:
     terrain: TerrainConfig = field(default_factory=TerrainConfig)
     hash: SpatialHashConfig = field(default_factory=SpatialHashConfig)
     resource: ResourceWorldConfig = field(default_factory=ResourceWorldConfig)
+    weather: WeatherConfig = field(default_factory=WeatherConfig)
+    mission: MissionConfig = field(default_factory=MissionConfig)
+    urban: UrbanPhysicsConfig = field(default_factory=UrbanPhysicsConfig)
     threat_kinds: tuple[ThreatKindConfig, ...] = field(default_factory=default_threat_kinds)
 
     objective_radius: float = 3_000.0  # m, arrival tolerance (horizontal)
@@ -374,7 +535,14 @@ class EnvConfig:
     # --- observation feature widths (derived; kept here so nets can import) ---
     @property
     def ego_dim(self) -> int:
-        return (14 if self.obs_edge_features else 10) + self.resource.observation_dim
+        return ((14 if self.obs_edge_features else 10) + self.resource.observation_dim
+                + self.weather.observation_dim + self.mission.observation_dim)
+
+    @property
+    def environment_model_id(self) -> str:
+        if self.urban.enabled:
+            return ENV_URBAN_VEHICLE_WEATHER
+        return ENV_VEHICLE_WEATHER if self.weather.enabled else self.resource.model
 
     @property
     def n_threat_kinds(self) -> int:

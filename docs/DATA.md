@@ -11,6 +11,8 @@ Raw bytes live in `data_cache/` (gitignored, regenerable); `data_cache/manifest.
 | --- | --- | --- |
 | USGS 3D Elevation Program (3DEP) | Public domain (US Government work, USGS) | Terrain elevation grid for radar line-of-sight masking and terrain-following routes. |
 | Copernicus DEM GLO-30 | Copernicus DEM free/open licence (ESA/Airbus), attribution required | Global DEM fallback where 3DEP has no coverage. |
+| USGS 3DEP lidar point clouds (Entwine Point Tiles, AWS open data) | Public domain (US Government work, USGS) | Structure heights for the physics-grade urban obstacle artifact: the provider's building and bridge-deck returns (or, where it classified no buildings, unclassified surface returns) over its bare-earth returns. Physics evidence, unlike OSM. |
+| NYC Building Footprints (NYC Open Data, DoITT/OTI) | NYC Open Data Terms of Use (public data, no restriction on reuse beyond attribution of the source) | Authoritative footprints and roof heights for nyc_harbor's urban physics box, reconciled with USGS 3DEP lidar. Dated source: the model is a capture-date snapshot, never a statement about current conditions. |
 | OurAirports | Public domain (dedicated to the public domain by OurAirports) | Airfield and runway geometry -> sortie start points, objectives, no-fly structure. |
 | OpenSky Network REST API | Free for non-commercial / research use under the OpenSky Network terms | Real civil aircraft kinematics -> calibrate airframe speed/climb/turn-rate envelopes. |
 | Open-Meteo Forecast API | CC BY 4.0 (Open-Meteo), free for non-commercial use without an API key | Surface pressure/temperature/humidity/wind -> air density and ceiling modelling. |
@@ -32,6 +34,7 @@ The optional `--visual urban-presentation` mode draws OpenStreetMap building foo
 | source requiring attribution | citation |
 | --- | --- |
 | Copernicus DEM GLO-30 | European Space Agency, Copernicus DEM GLO-30 Global 30m Digital Surface Model, distributed by OpenTopography. |
+| NYC Building Footprints (NYC Open Data, DoITT/OTI) | City of New York, Office of Technology and Innovation, Building Footprints (NYC Open Data dataset 5zhs-2jue), derived from the city's 3D Building Model and aerial lidar. |
 | OpenSky Network REST API | Schafer, M., Strohmeier, M., Lenders, V., Martinovic, I., Wilhelm, M. (2014). Bringing up OpenSky: A large-scale ADS-B sensor network for research. IPSN 2014, pp. 83-94. |
 | Open-Meteo Forecast API | Open-Meteo.com free weather API, CC BY 4.0. |
 | Copernicus Sentinel-2 (via Cesium ion asset 3954) | European Space Agency / Copernicus, Sentinel-2 MSI optical imagery, served as Cesium ion asset 3954. Contains modified Copernicus Sentinel data. |

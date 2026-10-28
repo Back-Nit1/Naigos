@@ -833,13 +833,26 @@ def test_the_static_urban_page_is_credential_free(recording, available, monkeypa
 
 @pytest.mark.parametrize("package", ["env", "rl"])
 def test_the_simulation_cannot_reach_the_city_layer(package):
+    def physics_urban_import(path, node):
+        """Allow only the evidence-grade env module, never demo.urban/provider data."""
+        aliases = {a.name for a in node.names}
+        if path.parent.name == "env":
+            # Any relative env-to-env urban symbol is inside the physics package;
+            # an absolute/relative demo import is rejected separately below.
+            return isinstance(node, ast.ImportFrom) and node.level >= 1
+        return isinstance(node, ast.ImportFrom) and node.level == 2 and (
+            (node.module == "env" and "urban" in aliases) or node.module == "env.urban"
+        )
+
     hits = []
     for path in sorted((REPO / "naigos" / package).rglob("*.py")):
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if isinstance(node, (ast.Import, ast.ImportFrom)):
                 names = [a.name for a in node.names] + [getattr(node, "module", None) or ""]
-                if any("urban" in n or "demo" in n for n in names):
+                if any("demo" in n for n in names) or (
+                    any("urban" in n for n in names) and not physics_urban_import(path, node)
+                ):
                     hits.append(f"{path.relative_to(REPO)}:{node.lineno}")
         text = path.read_text().lower()
         for word in ("osm_urban", "overpass", "urban-presentation", "building_height"):

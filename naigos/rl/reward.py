@@ -98,7 +98,8 @@ class RewardCurriculum:
 def aircraft_lost(terms: RewardTerms) -> jnp.ndarray:
     """Any terminal loss of the airframe, however it happened. (B,)."""
     return jnp.clip(
-        terms.shotdown + terms.terrain_violation + terms.bounds_violation + terms.out_of_fuel,
+        terms.shotdown + terms.terrain_violation + terms.building_collision
+        + terms.bounds_violation + terms.out_of_fuel,
         0.0,
         1.0,
     )

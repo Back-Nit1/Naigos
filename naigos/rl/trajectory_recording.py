@@ -174,7 +174,9 @@ def _hmap_label(hmap) -> str:
     return "dem-" + hashlib.sha256(str(arr.shape).encode() + arr.tobytes()).hexdigest()[:12]
 
 
-def environment_record(cfg: EnvConfig, hmap=None, **collection: Any) -> dict:
+def environment_record(
+    cfg: EnvConfig, hmap=None, *, urban_obstacle_digest: str | None = None, **collection: Any,
+) -> dict:
     """Everything needed to rebuild the environment, as plain JSON.
 
     ``collection`` is whatever identifies this collection run (key, world count,
@@ -186,8 +188,12 @@ def environment_record(cfg: EnvConfig, hmap=None, **collection: Any) -> dict:
     record: dict[str, Any] = {
         "env": dataclasses.asdict(cfg),
         "terrain": _hmap_label(hmap),
-        "observation_schema_id": ckpt.RESOURCE_OBSERVATION_SCHEMA if cfg.resource.enabled else ckpt.BASELINE_OBSERVATION_SCHEMA,
-        "actor_schema_id": ckpt.RESOURCE_ACTOR_SCHEMA if cfg.resource.enabled else ckpt.BASELINE_ACTOR_SCHEMA,
+        "environment_model_id": cfg.environment_model_id,
+        "observation_schema_id": ckpt.observation_schema_for_cfg(cfg),
+        "actor_schema_id": ckpt.actor_schema_for_cfg(cfg),
+        "environment_identity": ckpt.environment_identity_record(
+            cfg, urban_obstacle_digest=urban_obstacle_digest
+        ),
         "resource_bank": None,
         "collection": collection,
     }
@@ -216,10 +222,10 @@ def policy_record(
     from . import policies
 
     configuration: dict[str, Any] = {
-        "environment_model_id": cfg.resource.model,
+        "environment_model_id": cfg.environment_model_id,
         "resource_config": dataclasses.asdict(cfg.resource),
-        "observation_schema_id": ckpt.RESOURCE_OBSERVATION_SCHEMA if cfg.resource.enabled else ckpt.BASELINE_OBSERVATION_SCHEMA,
-        "actor_schema_id": ckpt.RESOURCE_ACTOR_SCHEMA if cfg.resource.enabled else ckpt.BASELINE_ACTOR_SCHEMA,
+        "observation_schema_id": ckpt.observation_schema_for_cfg(cfg),
+        "actor_schema_id": ckpt.actor_schema_for_cfg(cfg),
         **extra,
     }
     if cfg.resource.enabled:
@@ -257,11 +263,12 @@ def _extra_fields(cfg: EnvConfig, recurrent: bool, dims: Mapping[str, int]):
           "One on the transition an L1 recovery gate is reached (RewardTerms.diverted); zero in baseline-v0.", ident),
         f("resource/outcome", "uint8", ("agent",), "1",
           "The environment's exclusive first terminal outcome so far (0 ongoing, 1 primary, 2 diverted, 3 shot down, "
-          "4 terrain, 5 bounds, 6 fuel, 7 timeout; env precedence shot>terrain>bounds>fuel>primary>diverted>timeout). "
+          "4 terrain, 5 bounds, 6 fuel, 7 timeout, 8 building; env precedence "
+          "shot>building>terrain>bounds>fuel>primary>diverted>timeout). "
           "Distinct from status/termination_cause, which follows the trajectory-schema precedence.",
           {"method": "categorical", "values": {
               "ongoing": 0, "primary": 1, "diverted": 2, "shot_down": 3, "terrain": 4, "out_of_bounds": 5,
-              "out_of_fuel": 6, "timeout": 7}}),
+              "out_of_fuel": 6, "timeout": 7, "building_collision": 8}}),
         f("resource/diverted", "bool", ("agent",), "1", "Post-transition safe-diversion state (always false in baseline-v0).",
           ident),
         f("extension/route", "float32", ("route_feature",), "1",
@@ -283,6 +290,51 @@ def _extra_fields(cfg: EnvConfig, recurrent: bool, dims: Mapping[str, int]):
             f("privileged/burn_multiplier", "float32", ("agent",), "1",
               "TRUE episode burn multiplier. Privileged simulator state for auditing only; never an actor input.", ident),
         ]
+    if cfg.weather.enabled or cfg.urban.enabled:
+        fields += [
+            f("extension/cbf_reason_bits", "uint16", ("agent",), "1",
+              "Typed active-constraint bits: terrain=1, urban=2, threat=4, bounds=8, authority=16, resource=32."),
+        ]
+    if cfg.weather.enabled:
+        fields += [
+            f("extension/weather_observation", "float32", ("agent", "weather_feature"), "1",
+              "Pre-action local/noisy weather block received by the actor."),
+            f("privileged/mean_wind_enu", "float32", ("agent", "xyz"), "m/s", "True local mean wind."),
+            f("privileged/gust_enu", "float32", ("agent", "xyz"), "m/s", "True correlated gust state."),
+            f("privileged/density_ratio", "float32", ("agent",), "1", "True local density ratio."),
+            f("privileged/background_turbulence", "float32", ("agent",), "m/s", "Background turbulence sigma."),
+            f("privileged/mechanical_turbulence", "float32", ("agent",), "m/s", "Obstacle-derived wake sigma."),
+            f("extension/air_velocity", "float32", ("agent", "xyz"), "m/s", "Post-step air-relative velocity."),
+            f("extension/ground_velocity", "float32", ("agent", "xyz"), "m/s", "Post-step inertial velocity."),
+            f("privileged/gust_before", "float32", ("agent", "xyz"), "m/s", "Pre-step gust filter state."),
+            f("privileged/weather_stream_key", "uint32", ("key_word",), "1", "Named weather RNG stream root."),
+            f("privileged/weather_altitude_input", "float32", ("agent",), "m", "Altitude used for profile interpolation."),
+            f("privileged/weather_airspeed_input", "float32", ("agent",), "m/s", "TAS used for gust correlation time."),
+        ]
+    if cfg.mission.enabled:
+        fields += [
+            f("extension/mission_observation", "float32", ("agent", "mission_feature"), "1",
+              "Current-stage-only mission block received by the actor."),
+            f("extension/mission_stage_before", "int32", ("agent",), "1", "Current stage before transition."),
+            f("extension/mission_stage_after", "int32", ("agent",), "1", "Current stage after transition."),
+            f("extension/mission_dwell_before", "float32", ("agent",), "s", "Dwell before transition."),
+            f("extension/mission_dwell_after", "float32", ("agent",), "s", "Dwell after transition."),
+            f("privileged/mission_stage_pos", "float32", ("agent", "mission_stage", "xyz"), "m",
+              "Full fixed-shape mission stage geometry; verifier-only."),
+            f("privileged/mission_stage_mask", "bool", ("agent", "mission_stage"), "1", "Valid stage mask."),
+            f("privileged/mission_deadline_step", "int32", ("agent",), "step", "Mission deadline."),
+            f("extension/mission_outcome", "uint8", ("agent",), "1", "Exclusive mission outcome."),
+            f("extension/mission_completed", "bool", ("agent",), "1", "Primary mission complete."),
+            f("extension/mission_recovered", "bool", ("agent",), "1", "Safe recovery complete."),
+            f("extension/mission_failed", "bool", ("agent",), "1", "Mission loss or timeout."),
+        ]
+    if cfg.urban.enabled:
+        fields += [
+            f("reward/building_collision", "float32", ("agent",), "1",
+              "One on an evidence-grade urban obstacle collision.", ident),
+            f("extension/obstacle_clearance", "float32", ("agent",), "m", "Clearance above combined terrain/urban top."),
+            f("privileged/position_before", "float32", ("agent", "xyz"), "m", "Pre-transition position for swept verification."),
+        ]
     if recurrent:
         fields += [
             f("extension/memory_before", "float32", ("agent", "memory_unit"), "1",
@@ -302,6 +354,12 @@ def build_schema(cfg: EnvConfig, ev: Mapping[str, Any]):
     extra_dims = {"route_feature": 3}
     if cfg.resource.enabled:
         extra_dims.update(resource_feature=cfg.resource.observation_dim, gate=2, xyz=3)
+    if cfg.weather.enabled:
+        extra_dims.update(weather_feature=cfg.weather.observation_dim, xyz=3, key_word=2)
+    if cfg.mission.enabled:
+        extra_dims.update(mission_feature=cfg.mission.observation_dim, mission_stage=cfg.mission.max_stages, xyz=3)
+    if cfg.urban.enabled:
+        extra_dims.update(xyz=3)
     recurrent = "memory_before" in ev
     if recurrent:
         extra_dims["memory_unit"] = int(np.shape(ev["memory_before"])[-1])
@@ -335,6 +393,8 @@ def termination_causes(terms: Mapping[str, np.ndarray], ev: Mapping[str, np.ndar
     for name, key in (("reached", "arrived"), ("shot_down", "shotdown"), ("out_of_bounds", "bounds_violation"),
                       ("terrain", "terrain_violation")):  # later = higher precedence
         cause = np.where(terms[key] > 0.5, TERMINATION_CAUSES[name], cause).astype(np.uint8)
+    building = terms.get("building_collision", np.zeros(shape, dtype=np.float32))
+    cause = np.where((cause == 0) & (building > 0.5), TERMINATION_CAUSES["building"], cause)
     free = cause == 0
     if resource_enabled:
         cause = np.where(free & (terms["out_of_fuel"] > 0.5), TERMINATION_CAUSES["out_of_fuel"], cause)
@@ -398,7 +458,9 @@ def to_chunk(
         "cbf/feasible": ev_np["cbf_feasible"].astype(bool),
         "cbf/intervention_l2": np.linalg.norm(exe.astype(np.float64) - req.astype(np.float64), axis=-1).astype(np.float32),
         "constraint_cost/aircraft_loss": np.clip(
-            terms["shotdown"] + terms["terrain_violation"] + terms["bounds_violation"] + terms["out_of_fuel"], 0, 1
+            terms["shotdown"] + terms["terrain_violation"]
+            + (terms["building_collision"] if cfg.urban.enabled else 0.0)
+            + terms["bounds_violation"] + terms["out_of_fuel"], 0, 1
         ).astype(np.float32),
         "status/alive": ev_np["alive"].astype(bool),
         "status/reached": ev_np["reached"].astype(bool),
@@ -414,14 +476,57 @@ def to_chunk(
     }
     for name in _REWARD_TERMS:
         out[f"reward/{name}"] = terms[name]
+    if cfg.urban.enabled:
+        out["reward/building_collision"] = terms["building_collision"]
     if cfg.resource.enabled:
+        r0 = base
+        r1 = r0 + cfg.resource.observation_dim
         out.update({
-            "resource/observation": ego[..., base:],
+            "resource/observation": ego[..., r0:r1],
             "resource/reserve_fuel": ev_np["reserve_fuel"].astype(np.float32),
             "resource/initial_fuel": ev_np["initial_fuel"].astype(np.float32),
             "resource/diversion_pos": ev_np["diversion_pos"].astype(np.float32),
             "resource/diversion_active": ev_np["diversion_active"].astype(bool),
             "privileged/burn_multiplier": ev_np["burn_multiplier"].astype(np.float32),
+        })
+    offset = base + cfg.resource.observation_dim
+    if cfg.weather.enabled or cfg.urban.enabled:
+        out["extension/cbf_reason_bits"] = ev_np["cbf_reason_bits"].astype(np.uint16)
+    if cfg.weather.enabled:
+        out.update({
+            "extension/weather_observation": ego[..., offset:offset + cfg.weather.observation_dim],
+            "privileged/mean_wind_enu": ev_np["mean_wind_enu"].astype(np.float32),
+            "privileged/gust_enu": ev_np["gust_enu"].astype(np.float32),
+            "privileged/density_ratio": ev_np["density_ratio"].astype(np.float32),
+            "privileged/background_turbulence": ev_np["background_turbulence"].astype(np.float32),
+            "privileged/mechanical_turbulence": ev_np["mechanical_turbulence"].astype(np.float32),
+            "extension/air_velocity": ev_np["air_velocity"].astype(np.float32),
+            "extension/ground_velocity": ev_np["ground_velocity"].astype(np.float32),
+            "privileged/gust_before": ev_np["gust_before"].astype(np.float32),
+            "privileged/weather_stream_key": ev_np["weather_stream_key"].astype(np.uint32),
+            "privileged/weather_altitude_input": ev_np["weather_altitude_input"].astype(np.float32),
+            "privileged/weather_airspeed_input": ev_np["weather_airspeed_input"].astype(np.float32),
+        })
+        offset += cfg.weather.observation_dim
+    if cfg.mission.enabled:
+        out.update({
+            "extension/mission_observation": ego[..., offset:offset + cfg.mission.observation_dim],
+            "extension/mission_stage_before": ev_np["mission_stage_before"].astype(np.int32),
+            "extension/mission_stage_after": ev_np["mission_stage_after"].astype(np.int32),
+            "extension/mission_dwell_before": ev_np["mission_dwell_before"].astype(np.float32),
+            "extension/mission_dwell_after": ev_np["mission_dwell_after"].astype(np.float32),
+            "privileged/mission_stage_pos": ev_np["mission_stage_pos"].astype(np.float32),
+            "privileged/mission_stage_mask": ev_np["mission_stage_mask"].astype(bool),
+            "privileged/mission_deadline_step": ev_np["mission_deadline_step"].astype(np.int32),
+            "extension/mission_outcome": ev_np["mission_outcome"].astype(np.uint8),
+            "extension/mission_completed": ev_np["mission_completed"].astype(bool),
+            "extension/mission_recovered": ev_np["mission_recovered"].astype(bool),
+            "extension/mission_failed": ev_np["mission_failed"].astype(bool),
+        })
+    if cfg.urban.enabled:
+        out.update({
+            "extension/obstacle_clearance": ev_np["obstacle_clearance"].astype(np.float32),
+            "privileged/position_before": ev_np["pos_before"].astype(np.float32),
         })
     if "memory_before" in ev_np:
         after = ev_np["memory_after"].astype(np.float32)
@@ -628,7 +733,11 @@ def record_rollouts(
                 shard = new_shard(
                     rec, root, name, cfg=cfg, ev=ev_w, theatre=_hmap_label(env.fixed_hmap),
                     route=route_label(route), scenario=scenario or label, seed=seed,
-                    environment=environment_record(cfg, env.fixed_hmap, n_worlds=n_worlds, **(collection or {})),
+                    environment=environment_record(
+                        cfg, env.fixed_hmap,
+                        urban_obstacle_digest=(env.urban_surface.content_sha256 if env.urban_surface else None),
+                        n_worlds=n_worlds, **(collection or {}),
+                    ),
                     policy=policy, info=info,
                 )
             shard.add(chunk)
@@ -731,6 +840,9 @@ class TrainingRecorder:
         scenario = f"ppo-train/session-{self.session:03d}/segment-{self.segment:03d}/world-{w:04d}"
         env_rec = environment_record(
             self.env.cfg, self.env.fixed_hmap, kind="ppo-train", n_envs=self.n_envs, n_steps=self.n_steps,
+            urban_obstacle_digest=(
+                self.env.urban_surface.content_sha256 if self.env.urban_surface else None
+            ),
             world=w, session=self.session, segment=self.segment, segment_reason=self._reason,
             resumed_session=self.resumed, red_level=self._red_level,
         )

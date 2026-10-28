@@ -79,6 +79,24 @@ class ProtectedZone:
 
 
 @dataclass(frozen=True)
+class UrbanPhysicsSpec:
+    """Opt-in physics-grade urban obstacles for a theatre (docs/contracts/urban-obstacles-v1.md).
+
+    ``bounds`` is the documented urban physics box inside the AOI; ``cell_m`` the obstacle
+    raster's resolution. Present on an AOI means the env may collide with the artifact, so a
+    missing or corrupt artifact is an error for that theatre, never a silent fallback.
+    """
+
+    bounds: tuple[float, float, float, float]
+    cell_m: float
+
+    def __post_init__(self):
+        w, s, e, n = self.bounds
+        if not (w < e and s < n) or not (0.5 <= self.cell_m <= 100.0):
+            raise ValueError(f"urban_physics: malformed bounds {self.bounds} or cell_m {self.cell_m}")
+
+
+@dataclass(frozen=True)
 class AOI:
     """A named geographic bounding box in WGS84 degrees."""
 
@@ -100,6 +118,8 @@ class AOI:
     exclude_military_airfields: bool = False
     #: The theatre's one-line framing, shown wherever it is drawn.
     scenario: str = ""
+    #: Physics-grade urban obstacles required by this theatre, or None (the built-ins).
+    urban_physics: UrbanPhysicsSpec | None = None
     #: Where this AOI was defined: None for the built-ins, else the JSON file.
     #: A file-defined AOI builds its components in isolation (see run.main), so
     #: building it never rewrites the top-level ``components/*.json``.
@@ -194,7 +214,7 @@ AOIS: dict[str, AOI] = {
 #: Keys a file-defined AOI must carry, and the ones it may.
 _REQUIRED_KEYS = ("name", "west", "south", "east", "north", "country", "rationale",
                   "dem_source", "bounds_policy", "scenario")
-_OPTIONAL_KEYS = ("protected_zones", "exclude_military_airfields", "notes")
+_OPTIONAL_KEYS = ("protected_zones", "exclude_military_airfields", "notes", "urban_physics")
 
 
 def aoi_from_file(path: Path) -> AOI:
@@ -215,13 +235,22 @@ def aoi_from_file(path: Path) -> AOI:
         )
         for z in doc.get("protected_zones", [])
     )
+    up = doc.get("urban_physics")
+    physics = None
+    if up is not None:
+        if set(up) != {"bounds", "cell_m"}:
+            raise ValueError(f"{path}: urban_physics needs exactly bounds and cell_m, got {sorted(up)}")
+        physics = UrbanPhysicsSpec(tuple(float(v) for v in up["bounds"]), float(up["cell_m"]))
+        w, s_, e, n = physics.bounds
+        if not (doc["west"] <= w and doc["south"] <= s_ and e <= doc["east"] and n <= doc["north"]):
+            raise ValueError(f"{path}: urban_physics bounds must lie inside the AOI")
     return AOI(
         name=doc["name"], west=float(doc["west"]), south=float(doc["south"]),
         east=float(doc["east"]), north=float(doc["north"]), country=doc["country"],
         rationale=doc["rationale"], dem_source=doc["dem_source"],
         bounds_policy=doc["bounds_policy"], protected_zones=zones,
         exclude_military_airfields=bool(doc.get("exclude_military_airfields", False)),
-        scenario=doc["scenario"], definition_file=str(path),
+        scenario=doc["scenario"], urban_physics=physics, definition_file=str(path),
     )
 
 

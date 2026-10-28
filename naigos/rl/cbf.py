@@ -47,6 +47,16 @@ import jax.numpy as jnp
 
 from ..env.config import G0, EnvConfig
 from ..env import terrain as terrain_mod
+from ..env import urban as urban_mod
+
+
+CBF_REASON_TERRAIN = 1 << 0
+CBF_REASON_URBAN = 1 << 1
+CBF_REASON_THREAT = 1 << 2
+CBF_REASON_BOUNDS = 1 << 3
+CBF_REASON_AUTHORITY = 1 << 4
+CBF_REASON_RESOURCE = 1 << 5
+CBF_CONTRACT_ID = "cbf-weather-urban-v1"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -140,14 +150,16 @@ def _terrain_constraint(cbf: CBFConfig, cfg: EnvConfig, hmap, pos, psi, speed, g
     return jnp.clip(gamma_min, -cfg.airframe.gamma_max, cfg.airframe.gamma_max)
 
 
-def _bounds_constraints(cbf: CBFConfig, cfg: EnvConfig, pos, vel):
+def _bounds_constraints(cbf: CBFConfig, cfg: EnvConfig, pos, vel, bounds=None):
     """Four half-space barriers, one per map edge. Same distance form as the
     envelope barrier so the gains mean the same thing."""
-    ex, ey = cfg.terrain.extent_x, cfg.terrain.extent_y
+    if bounds is None:
+        bounds = jnp.array([0.0, cfg.terrain.extent_x, 0.0, cfg.terrain.extent_y])
+    x0, x1, y0, y1 = bounds
     m = cbf.bounds_margin
     # outward normals of the *inside* region: h = n . p - c >= 0
     normals = jnp.array([[1.0, 0.0], [-1.0, 0.0], [0.0, 1.0], [0.0, -1.0]])
-    offsets = jnp.array([m, -(ex - m), m, -(ey - m)])
+    offsets = jnp.array([x0 + m, -(x1 - m), y0 + m, -(y1 - m)])
     h = normals @ pos[:2] - offsets  # (4,)
 
     v = vel[:2]
@@ -160,6 +172,41 @@ def _bounds_constraints(cbf: CBFConfig, cfg: EnvConfig, pos, vel):
     psi1 = hdot + cbf.alpha1 * h
     b = -(cbf.alpha1 * hdot + cbf.alpha2 * psi1)
     return A, b
+
+
+def _urban_surface_constraint(cbf, cfg, surface, hmap, pos, psi, speed, gamma, ground_vel, authority):
+    """Look-ahead vertical constraint over the validated combined top surface.
+
+    Raster roofs are discontinuous, so a local terrain gradient is not useful at
+    a facade.  The new rung instead samples the current top and the top reached
+    after one decision plus gamma-actuator time constant.  The resulting
+    secant slope is conservative at the artifact resolution and remains a
+    fixed-shape JAX computation.  Unknown coverage retains the artifact
+    contract's explicit terrain-only semantics.
+    """
+    horizon = cfg.dt + cfg.airframe.tau_gamma / jnp.maximum(authority, 1e-3)
+    ahead = pos + horizon * ground_vel
+    top0, building0, _ = urban_mod.sample(surface, hmap, cfg.terrain, pos[0], pos[1])
+    # Endpoint-only lookahead would tunnel over a narrow roof for exactly the
+    # same reason endpoint-only collision detection does. A bounded broad-phase
+    # ray samples the validated raster between now and the delayed response.
+    count = min(cfg.urban.collision_samples, 32)
+    fractions = jnp.linspace(0.0, 1.0, count + 1, dtype=jnp.float32)
+    samples = pos[None, :] + fractions[:, None] * (ahead - pos)[None, :]
+    tops, buildings, _ = urban_mod.sample(surface, hmap, cfg.terrain, samples[:, 0], samples[:, 1])
+    peak_index = jnp.argmax(tops)
+    top1 = tops[peak_index]
+    building1 = buildings[peak_index]
+    horizontal = jnp.maximum(jnp.linalg.norm(ahead[:2] - pos[:2]), 1.0)
+    run_to_peak = jnp.maximum(fractions[peak_index] * horizontal, surface.cell_m)
+    slope = (top1 - top0) / run_to_peak
+    h = pos[2] - top0 - cfg.airframe.floor_agl - cbf.terrain_margin
+    hdot = ground_vel[2] - jnp.linalg.norm(ground_vel[:2]) * slope
+    psi1 = hdot + cbf.alpha1_terrain * h
+    need = -cbf.alpha1_terrain * hdot - cbf.alpha2_terrain * psi1
+    denom = speed * jnp.cos(gamma) * authority / jnp.maximum(cfg.airframe.tau_gamma, 1e-3)
+    gamma_min = gamma + need / jnp.maximum(denom, 1e-3)
+    return jnp.clip(gamma_min, -cfg.airframe.gamma_max, cfg.airframe.gamma_max), building0 | building1
 
 
 def _project_qp(u0, A, b, lo, hi, n_iters: int, w=None):
@@ -186,6 +233,42 @@ def _project_qp(u0, A, b, lo, hi, n_iters: int, w=None):
     u, _ = jax.lax.scan(body, jnp.clip(u0, lo, hi), None, length=n_iters)
     feasible = jnp.all(A @ u >= b - 1e-3)
     return u, feasible
+
+
+def reference_project_qp_numpy(u0, A, b, lo, hi, w=None):
+    """Independent exact 2-D active-set oracle for held-out verification.
+
+    This NumPy-only routine is never used by training.  It enumerates the
+    unconstrained point, every single-boundary weighted projection, and every
+    pairwise boundary intersection (including the action box), then selects the
+    feasible minimum.  Empty intersections fail closed with ``(nan, false)``.
+    """
+    import itertools
+    import numpy as np
+
+    u0 = np.asarray(u0, dtype=np.float64)
+    A = np.asarray(A, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    lo = np.asarray(lo, dtype=np.float64)
+    hi = np.asarray(hi, dtype=np.float64)
+    w = np.ones(2, dtype=np.float64) if w is None else np.asarray(w, dtype=np.float64)
+    AA = np.concatenate([A, np.eye(2), -np.eye(2)], axis=0)
+    bb = np.concatenate([b, lo, -hi], axis=0)
+    winv = 1.0 / w
+    candidates = [u0]
+    for a, rhs in zip(AA, bb):
+        denom = np.sum(winv * a * a)
+        if denom > 1e-12:
+            candidates.append(u0 + (rhs - np.dot(a, u0)) * winv * a / denom)
+    for i, j in itertools.combinations(range(len(bb)), 2):
+        pair = AA[[i, j]]
+        if abs(np.linalg.det(pair)) > 1e-12:
+            candidates.append(np.linalg.solve(pair, bb[[i, j]]))
+    feasible = [u for u in candidates if np.all(AA @ u >= bb - 1e-9)]
+    if not feasible:
+        return np.full(2, np.nan), False
+    best = min(feasible, key=lambda u: float(np.sum(w * (u - u0) ** 2)))
+    return np.asarray(best), True
 
 
 def filter_action(
@@ -250,6 +333,114 @@ def filter_action(
     return jnp.stack([a0, a1, a2]), feasible
 
 
+def filter_action_diagnostics(
+    cbf: CBFConfig,
+    cfg: EnvConfig,
+    hmap,
+    action,
+    pos,
+    psi,
+    gamma,
+    phi,
+    speed,
+    known_centers,
+    known_radii,
+    known_active,
+    estimated_wind_enu,
+    estimated_density_ratio,
+    bounds,
+    urban_surface=None,
+):
+    """New-rung CBF with executable-authority and typed reason diagnostics.
+
+    The wind input is the actor-visible local estimate (mean plus estimated
+    gust), never future profile truth.  Density is likewise the onboard
+    estimate.  This remains an attempted backstop: ``feasible`` reports the
+    projected intersection and the authority bit is set when it is empty.
+    """
+    af = cfg.airframe
+    rho = jnp.clip(estimated_density_ratio, 0.35, 1.25)
+    authority = jnp.clip(jnp.sqrt(rho), 0.55, 1.10)
+    phi_lim = jnp.arccos(1.0 / af.n_max)
+
+    # One-step executable authority: invert the same first-order actuator lag
+    # used by step_atmosphere rather than pretending the commanded bank exists
+    # instantaneously.
+    bank_fraction = jnp.minimum(cfg.dt * authority / jnp.maximum(af.tau_bank, 1e-3), 1.0)
+    phi_cmd = action[0] * phi_lim
+    phi_next = phi + (phi_cmd - phi) * bank_fraction
+    a_lat_pol = G0 * jnp.tan(phi_next)
+    phi_lo = phi + (-phi_lim - phi) * bank_fraction
+    phi_hi = phi + (phi_lim - phi) * bank_fraction
+    a_lat_lo, a_lat_hi = G0 * jnp.tan(phi_lo), G0 * jnp.tan(phi_hi)
+
+    speed_cmd = af.v_stall + 0.5 * (action[2] + 1.0) * (af.v_max - af.v_stall)
+    speed_fraction = jnp.minimum(cfg.dt * authority / jnp.maximum(af.tau_speed, 1e-3), 1.0)
+    a_long_pol = (speed_cmd - speed) * speed_fraction / jnp.maximum(cfg.dt, 1e-3)
+    a_long_lo = jnp.maximum(-cbf.a_long_max * authority, (af.v_stall - speed) / jnp.maximum(cfg.dt, 1e-3))
+    a_long_hi = jnp.minimum(cbf.a_long_max * authority, (af.v_max - speed) / jnp.maximum(cfg.dt, 1e-3))
+
+    c, s = jnp.cos(gamma), jnp.sin(gamma)
+    air_vel = jnp.array([speed * c * jnp.cos(psi), speed * c * jnp.sin(psi), speed * s])
+    ground_vel = air_vel + estimated_wind_enu
+    u0 = jnp.array([a_long_pol, a_lat_pol])
+
+    if cbf.enable_envelope:
+        At, bt = _envelope_constraints(cbf, pos, ground_vel, known_centers, known_radii, known_active)
+    else:
+        At = jnp.zeros((known_centers.shape[0], 2))
+        bt = jnp.full((known_centers.shape[0],), -1e9)
+    threat_active = jnp.any(known_active & ((At @ u0) < bt - 1e-3))
+
+    if cbf.enable_bounds:
+        Ab, bb = _bounds_constraints(cbf, cfg, pos, ground_vel, bounds)
+        bounds_active = jnp.any((Ab @ u0) < bb - 1e-3)
+        A, b = jnp.concatenate([At, Ab], 0), jnp.concatenate([bt, bb], 0)
+    else:
+        bounds_active = jnp.bool_(False)
+        A, b = At, bt
+
+    lo = jnp.array([a_long_lo, a_lat_lo])
+    hi = jnp.array([a_long_hi, a_lat_hi])
+    u, feasible = _project_qp(u0, A, b, lo, hi, cbf.n_iters, jnp.array([cbf.w_long, 1.0]))
+
+    # Convert the achievable next-step accelerations back to command space.
+    next_phi = jnp.arctan(u[1] / G0)
+    safe_phi_cmd = phi + (next_phi - phi) / jnp.maximum(bank_fraction, 1e-3)
+    a0 = jnp.clip(safe_phi_cmd / phi_lim, -1.0, 1.0)
+    safe_speed_cmd = speed + u[0] * cfg.dt / jnp.maximum(speed_fraction, 1e-3)
+    a2 = jnp.clip(2.0 * (safe_speed_cmd - af.v_stall) / (af.v_max - af.v_stall) - 1.0, -1.0, 1.0)
+
+    a1 = action[1]
+    terrain_active = jnp.bool_(False)
+    urban_active = jnp.bool_(False)
+    if cbf.enable_terrain:
+        if cfg.urban.enabled:
+            if urban_surface is None:
+                raise ValueError("urban CBF requires the validated urban obstacle surface")
+            gamma_min, building_ahead = _urban_surface_constraint(
+                cbf, cfg, urban_surface, hmap, pos, psi, speed, gamma, ground_vel, authority
+            )
+        else:
+            gamma_min = _terrain_constraint(cbf, cfg, hmap, pos, psi, speed, gamma)
+            building_ahead = jnp.bool_(False)
+        gamma_from_roc = jnp.arcsin(jnp.clip(af.roc_max / jnp.maximum(speed, af.v_stall), -1.0, 1.0))
+        gamma_lim = jnp.minimum(af.gamma_max, gamma_from_roc) * authority
+        required = jnp.clip(gamma_min / jnp.maximum(gamma_lim, 1e-3), -1.0, 1.0)
+        raised = required > action[1] + 1e-6
+        a1 = jnp.maximum(a1, required)
+        urban_active = raised & building_ahead
+        terrain_active = raised & ~building_ahead
+
+    bits = jnp.uint16(0)
+    bits |= jnp.where(terrain_active, jnp.uint16(CBF_REASON_TERRAIN), jnp.uint16(0))
+    bits |= jnp.where(urban_active, jnp.uint16(CBF_REASON_URBAN), jnp.uint16(0))
+    bits |= jnp.where(threat_active, jnp.uint16(CBF_REASON_THREAT), jnp.uint16(0))
+    bits |= jnp.where(bounds_active, jnp.uint16(CBF_REASON_BOUNDS), jnp.uint16(0))
+    bits |= jnp.where(~feasible, jnp.uint16(CBF_REASON_AUTHORITY), jnp.uint16(0))
+    return jnp.stack([a0, jnp.clip(a1, -1.0, 1.0), a2]), feasible, bits
+
+
 def make_filter(cbf: CBFConfig, cfg: EnvConfig):
     """Vectorised over the blue cohort. `known_*` come from the observation, so
     the filter only ever uses envelopes the aircraft has actually sensed --
@@ -265,7 +456,7 @@ def make_filter(cbf: CBFConfig, cfg: EnvConfig):
     return filt
 
 
-def make_policy_filter(cbf: CBFConfig, cfg: EnvConfig):
+def make_policy_filter(cbf: CBFConfig, cfg: EnvConfig, *, urban_surface=None):
     """Build an `action_filter(state, obs, action) -> (action, feasible)` for
     `NaigosEnv.rollout`.
 
@@ -278,17 +469,43 @@ def make_policy_filter(cbf: CBFConfig, cfg: EnvConfig):
     from ..env.obs import known_envelopes
 
     vfilt = jax.vmap(filter_action, in_axes=(None, None, None, 0, 0, 0, 0, 0, 0, 0, 0, 0))
+    physics_diagnostics = cfg.weather.enabled or cfg.urban.enabled
+    if cfg.urban.enabled and urban_surface is None:
+        raise ValueError("urban CBF requires the validated urban obstacle surface")
+
+    # hmap varies per world but not per aircraft. Keep it outside the helper so
+    # a validated UrbanSurface remains a construction-time closure, never an
+    # environment-state payload or a file read inside jit.
+    def diagnostics(state, action, centers, radii, active):
+        def one(a, p, ps, ga, ph, sp, ce, ra, ac, wi, de):
+            return filter_action_diagnostics(
+                cbf, cfg, state.hmap, a, p, ps, ga, ph, sp,
+                ce, ra, ac, wi, de, state.bounds, urban_surface,
+            )
+
+        return jax.vmap(one)(
+            action, state.air.pos, state.air.psi, state.air.gamma, state.air.phi, state.air.speed,
+            centers, radii, active,
+            state.weather.estimated_wind_enu, state.weather.estimated_density_ratio,
+        )
 
     def action_filter(state, obs, action):
         centers, radii, active = known_envelopes(cfg, obs, state.air.pos, state.air.psi)
-        safe, feasible = vfilt(
-            cbf, cfg, state.hmap, action,
-            state.air.pos, state.air.psi, state.air.gamma, state.air.phi, state.air.speed,
-            centers, radii, active,
-        )
+        if physics_diagnostics:
+            safe, feasible, reasons = diagnostics(state, action, centers, radii, active)
+        else:
+            safe, feasible = vfilt(
+                cbf, cfg, state.hmap, action,
+                state.air.pos, state.air.psi, state.air.gamma, state.air.phi, state.air.speed,
+                centers, radii, active,
+            )
         # a dead or arrived aircraft is frozen anyway; leave its action alone so
         # the feasibility statistic is not polluted by aircraft that are not flying
-        flying = state.alive & ~state.reached
-        return jnp.where(flying[:, None], safe, action), feasible & flying
+        flying = state.alive & ~state.reached & ~state.resource.diverted
+        safe = jnp.where(flying[:, None], safe, action)
+        feasible = feasible & flying
+        if physics_diagnostics:
+            return safe, feasible, jnp.where(flying, reasons, jnp.uint16(0))
+        return safe, feasible
 
     return action_filter

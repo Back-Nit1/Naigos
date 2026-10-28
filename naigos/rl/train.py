@@ -138,6 +138,12 @@ def _is_l1(final) -> bool:
     return bool(np.asarray(final.resource.diversion_active).any())
 
 
+def _is_mission(final, traj=None) -> bool:
+    """Read the explicit rollout identity; MissionState shape is shared by legacy."""
+    del final
+    return bool(np.asarray(traj.get("mission_enabled", False)).any()) if traj is not None else False
+
+
 def _live_mask(traj, final) -> np.ndarray:
     """(W, S, B) float mask of samples a metric may average over.
 
@@ -147,7 +153,8 @@ def _live_mask(traj, final) -> np.ndarray:
     otherwise dilute every live-step mean. The terminal step itself stays live.
     """
     alive = np.asarray(traj["alive"])
-    if not _is_l1(final):
+    mission = _is_mission(final, traj)
+    if not _is_l1(final) and not mission:
         return alive.astype(np.float32)
     done = np.asarray(traj["reached"]) | np.asarray(traj["diverted"]) | ~alive
     before = np.concatenate([np.zeros_like(done[:, :1]), done[:, :-1]], axis=1)
@@ -198,7 +205,8 @@ def _outcome_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
     """
     terms = traj["terms"]
     n = n_worlds * n_blue
-    if not _is_l1(final):
+    mission = _is_mission(final, traj)
+    if not _is_l1(final) and not mission:
         return {
             "survival_rate": float(final.alive.mean()),
             "objective_rate": float(final.reached.mean()),
@@ -209,20 +217,77 @@ def _outcome_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
     def share(code):
         return float((out == code).sum() / n)
 
-    return {
-        "survival_rate": share(resource_mod.OUTCOME_PRIMARY),
+    primary = share(resource_mod.OUTCOME_PRIMARY)
+    diverted = share(resource_mod.OUTCOME_DIVERTED)
+    if mission:
+        completed = np.asarray(final.mission.completed)
+        recovered = np.asarray(final.mission.recovered) | np.asarray(final.resource.diverted)
+        alive = np.asarray(final.alive)
+        successful_survival = float(((completed | recovered) & alive).mean())
+    else:
+        successful_survival = primary
+    result = {
+        "survival_rate": successful_survival,
         "objective_rate": share(resource_mod.OUTCOME_PRIMARY),
-        "diversion_rate": share(resource_mod.OUTCOME_DIVERTED),
-        "recovery_rate": share(resource_mod.OUTCOME_PRIMARY) + share(resource_mod.OUTCOME_DIVERTED),
+        "diversion_rate": diverted,
+        "recovery_rate": successful_survival if mission else primary + diverted,
         "timeout_rate": share(resource_mod.OUTCOME_TIMEOUT),
         "fuel_loss_rate": share(resource_mod.OUTCOME_FUEL),
         "shootdown_rate": share(resource_mod.OUTCOME_SHOTDOWN),
         "terrain_rate": share(resource_mod.OUTCOME_TERRAIN),
+        "building_collision_rate": share(resource_mod.OUTCOME_BUILDING),
         "bounds_rate": share(resource_mod.OUTCOME_BOUNDS),
         "raw_shootdown_rate": float(np.asarray(terms.shotdown).sum() / n),
         "raw_terrain_rate": float(np.asarray(terms.terrain_violation).sum() / n),
+        "raw_building_collision_rate": float(
+            np.asarray(getattr(terms, "building_collision", np.zeros_like(terms.shotdown))).sum() / n
+        ),
         "raw_bounds_rate": float(np.asarray(terms.bounds_violation).sum() / n),
         "raw_fuel_loss_rate": float(np.asarray(terms.out_of_fuel).sum() / n),
+    }
+    if mission:
+        result.update({
+            "primary_mission_completion_rate": float(completed.mean()),
+            "safe_diversion_recovery_rate": float((recovered & alive).mean()),
+            "joint_mission_survival_rate": float((completed & alive).mean()),
+        })
+    return result
+
+
+def _physics_mission_diagnostics(final, traj, n_worlds: int, n_blue: int) -> dict:
+    """Additional measurements for opt-in mission/weather/urban evaluation."""
+    if not _is_mission(final, traj):
+        return {}
+    n = max(n_worlds * n_blue, 1)
+    outcome = np.asarray(traj["outcome"])
+    terminal = outcome != resource_mod.OUTCOME_ONGOING
+    first = np.argmax(terminal, axis=1) + 1
+    first = np.where(terminal.any(axis=1), first, terminal.shape[1])
+    dt_s = float(np.asarray(traj["dt_s"]).reshape(-1)[0])
+    ground = np.asarray(traj["ground_velocity"])
+    route_length = dt_s * np.linalg.norm(ground, axis=-1).sum(axis=1)
+    initial_fuel = np.asarray(final.resource.initial_fuel)
+    fuel_used = initial_fuel - np.asarray(final.air.fuel)
+    requested = np.asarray(traj["action_requested"])
+    executed = np.asarray(traj["action_executed"])
+    correction = np.linalg.norm(executed - requested, axis=-1)
+    reasons = np.asarray(traj.get("cbf_reason_bits", np.zeros_like(outcome, dtype=np.uint16)))
+    gust = np.linalg.norm(np.asarray(traj["gust_enu"]), axis=-1)
+    stall = np.asarray(traj["terms"].stall_violation)
+    ceiling = np.asarray(traj["terms"].ceiling_violation)
+    return {
+        "mission_duration_s": float(dt_s * first.sum() / n),
+        "route_length_m": float(route_length.sum() / n),
+        "fuel_used_kg": float(fuel_used.sum() / n),
+        "stall_envelope_rate": float(np.any((stall + ceiling) > 0, axis=1).sum() / n),
+        "max_gust_mps": float(gust.max(initial=0.0)),
+        "cbf_intervention_rate": float((correction > 1e-6).mean()),
+        "cbf_correction_mean": float(correction.mean()),
+        "cbf_terrain_reason_rate": float(((reasons & 1) != 0).mean()),
+        "cbf_urban_reason_rate": float(((reasons & 2) != 0).mean()),
+        "cbf_threat_reason_rate": float(((reasons & 4) != 0).mean()),
+        "cbf_bounds_reason_rate": float(((reasons & 8) != 0).mean()),
+        "cbf_authority_exceedance_rate": float(((reasons & 16) != 0).mean()),
     }
 
 
@@ -253,6 +318,7 @@ def rollout_metrics(final, traj, n_worlds: int, n_blue: int) -> dict:
     return {
         **outcome,
         **resource,
+        **_physics_mission_diagnostics(final, traj, n_worlds, n_blue),
         **_exposure_metrics(traj, final, n_worlds, n_blue),
         "mean_lock": float((np.asarray(traj["terms"].lock_level) * live).sum() / max(live.sum(), 1)),
         "mean_min_agl": float(np.asarray(traj["alt_agl"]).min(axis=0).mean()),
@@ -373,7 +439,7 @@ def evaluate(
     if use_cbf:
         from .cbf import CBFConfig, make_policy_filter
 
-        afilter = make_policy_filter(CBFConfig(), env.cfg)
+        afilter = make_policy_filter(CBFConfig(), env.cfg, urban_surface=env.urban_surface)
     record = trec.is_recording(recording)
     final, traj = jax.jit(jax.vmap(lambda k: env.rollout(k, pol, action_filter=afilter, record=record)))(
         jax.random.split(key, n_worlds)
@@ -430,7 +496,7 @@ def make_reserve_divert_policy(cfg: EnvConfig):
 
     def reserve_divert(obs, key):
         del key
-        resource = obs.ego[:, base:]
+        resource = obs.ego[:, base:base + cfg.resource.observation_dim]
         primary_margin = resource[:, 3]
         gates = resource[:, 6:].reshape(cfg.n_blue, 2, 7)
         margins = jnp.where(gates[..., 6] > 0.5, gates[..., 5], -jnp.inf)
@@ -448,6 +514,37 @@ def make_reserve_divert_policy(cfg: EnvConfig):
     return reserve_divert
 
 
+def make_weather_conservative_policy(cfg: EnvConfig):
+    """Observation-only wind correction with turbulence/density conservatism.
+
+    It consumes exactly the six local actor weather features: body-axis wind,
+    turbulence magnitude, density estimate, and uncertainty. It never sees the
+    privileged profile, true gust state, or future values.
+    """
+    if not cfg.weather.enabled:
+        raise ValueError("weather-conservative requires the vehicle-weather model")
+    base = (14 if cfg.obs_edge_features else 10) + cfg.resource.observation_dim
+
+    def weather_conservative(obs, key):
+        del key
+        local = obs.ego[:, base:base + cfg.weather.observation_dim]
+        wind_forward = local[:, 0] * 100.0
+        wind_left = local[:, 1] * 100.0
+        wind_up = local[:, 2] * 100.0
+        turbulence = local[:, 3] * 50.0
+        density = local[:, 4]
+        uncertainty = local[:, 5] * 50.0
+        objective_error = jnp.arctan2(obs.ego[:, 4], obs.ego[:, 5])
+        crab = -jnp.arctan2(wind_left, jnp.maximum(cfg.airframe.v_init + wind_forward, 30.0))
+        bank = jnp.clip(2.0 * (objective_error + crab), -0.8, 0.8)
+        vertical = jnp.clip(-wind_up / jnp.maximum(cfg.airframe.roc_max, 1.0), -0.5, 0.5)
+        demand = jnp.clip((turbulence + uncertainty) / 25.0 + (1.0 - density), 0.0, 1.0)
+        throttle = jnp.clip(0.55 - 0.25 * demand, -1.0, 1.0)
+        return jnp.stack([bank, vertical, throttle], axis=-1)
+
+    return weather_conservative
+
+
 BASELINE_POLICIES = {"direct": direct_route_policy, "avoid_nap": avoid_nap_policy}
 
 
@@ -456,6 +553,8 @@ def baseline_policies(cfg: EnvConfig) -> dict:
     pols = dict(BASELINE_POLICIES)
     if cfg.resource.enabled:
         pols["reserve_divert"] = make_reserve_divert_policy(cfg)
+    if cfg.weather.enabled:
+        pols["weather_conservative"] = make_weather_conservative_policy(cfg)
     return pols
 
 
@@ -602,7 +701,7 @@ def evaluate_route_bank(
     if use_cbf:
         from .cbf import CBFConfig, make_policy_filter
 
-        afilter = make_policy_filter(CBFConfig(), env.cfg)
+        afilter = make_policy_filter(CBFConfig(), env.cfg, urban_surface=env.urban_surface)
     keys, routes = _route_bank_inputs(rows)
     record = trec.is_recording(recording)
     if record and record_policy is None:
@@ -702,7 +801,11 @@ def evaluate_resource_bank(
         finals, trajs, by_combination = [], [], {}
         for row in resource_bank(split):
             cfg = config_for_scenario(env.cfg, row)
-            sub = NaigosEnv(cfg, hmap=hmap, red_policy=env.red_policy)
+            sub = NaigosEnv(
+                cfg, hmap=hmap, red_policy=env.red_policy,
+                urban_obstacles=env.urban_obstacles,
+                env_origin_utm_m=env.env_origin_utm_m,
+            )
             result["problems"] += provenance_problems(cfg, row, base_digest, hmap)
             key = jax.random.PRNGKey(row.seed)
             route = jnp.array([np.deg2rad(row.bearing_deg), row.family_id], dtype=jnp.float32)
@@ -757,6 +860,8 @@ def run(
     resume_from: str | Path | None = None,
     on_progress: Callable[[dict], None] | None = None,
     red_curriculum: RedCurriculum | None = None,
+    urban_obstacles=None,
+    env_origin_utm_m=None,
 ):
     """Train (see `_run`), optionally recording the PPO collector's rollouts.
 
@@ -769,6 +874,7 @@ def run(
     try:
         result = _run(
             env_cfg, ppo_cfg, train_cfg, hmap, meta, on_persist, resume_from, on_progress, red_curriculum,
+            urban_obstacles, env_origin_utm_m,
             _recorders=recorders,
         )
     except BaseException:
@@ -790,6 +896,8 @@ def _run(
     resume_from: str | Path | None = None,
     on_progress: Callable[[dict], None] | None = None,
     red_curriculum: RedCurriculum | None = None,
+    urban_obstacles=None,
+    env_origin_utm_m=None,
     _recorders: list | None = None,
 ):
     """Train, and record what it cost.
@@ -831,6 +939,11 @@ def _run(
         family=ppo_cfg.policy_family,
         version=ppo_cfg.policy_version,
     )
+    urban_digest = None
+    if env_cfg.urban.enabled:
+        if urban_obstacles is None:
+            raise ValueError("urban training requires the explicitly validated obstacle artifact")
+        urban_digest = urban_obstacles.hashes.content_sha256
     plateau = train_cfg.plateau
     if plateau is not None and plateau.min_evaluations < 1:
         raise CurriculumError(f"plateau.min_evaluations must be at least 1, got {plateau.min_evaluations}")
@@ -876,6 +989,20 @@ def _run(
                 resource_config=dataclasses.asdict(env_cfg.resource),
                 resource_bank=resource_protocol(base_config_digest(env_cfg, hmap)),
             )
+        if env_cfg.weather.enabled or env_cfg.mission.enabled or env_cfg.urban.enabled:
+            identity = ckpt.environment_identity_record(
+                env_cfg,
+                urban_obstacle_digest=urban_digest,
+                code_commit=((meta.get("code") or {}).get("commit")),
+                code_dirty=((meta.get("code") or {}).get("dirty")),
+            )
+            identity["policy_family"] = f"{policy_spec.family.value}@{policy_spec.version}"
+            meta_config.update(
+                environment_model_id=env_cfg.environment_model_id,
+                observation_schema_id=ckpt.observation_schema_for_cfg(env_cfg),
+                actor_schema_id=ckpt.actor_schema_for_cfg(env_cfg),
+                environment_identity=identity,
+            )
         meta = {
             **meta,
             "config": meta_config,
@@ -895,6 +1022,7 @@ def _run(
         "policy_version": policy_spec.version,
         "policy_parameter_count": policy_spec.parameter_count,
         "policy_spec_sha256": policy_spec.sha256,
+        "environment_model_id": env_cfg.environment_model_id,
         "env_steps_per_iteration": steps_per_iter,
         "agent_steps_per_iteration": steps_per_iter * env_cfg.n_blue,
     }
@@ -948,7 +1076,10 @@ def _run(
 
     blob = ckpt.load(resume_from) if resume_from is not None else None
     if blob is not None:
-        ckpt.require_resume_compatible(blob, env_cfg, ppo_cfg, policy_spec, resume_from)
+        ckpt.require_resume_compatible(
+            blob, env_cfg, ppo_cfg, policy_spec, resume_from,
+            urban_obstacle_digest=urban_digest,
+        )
         rec = blob["recovery"]
         # Restore the curriculum state BEFORE building the env, because the env
         # is a function of the red level and the reward weights are a function
@@ -962,7 +1093,10 @@ def _run(
         wall_offset = float(rec.get("wall_s") or 0.0)
 
     cfg = red_cur.apply(env_cfg, level)
-    env = NaigosEnv(cfg, hmap=hmap)
+    env = NaigosEnv(
+        cfg, hmap=hmap, urban_obstacles=urban_obstacles,
+        env_origin_utm_m=env_origin_utm_m,
+    )
     weights, sw, ew = rew_cur.weights_for(base_w, shootdown_rate)
 
     # `k_init` is derived from the seed the same way on a fresh run and on a
@@ -1325,6 +1459,8 @@ def _run(
                 run_name=(meta or {}).get("run_name"),
                 code_commit=((meta or {}).get("code") or {}).get("commit"),
                 resumed_from=resume_info.get("resume_chain"),
+                urban_obstacle_digest=urban_digest,
+                code_dirty=((meta or {}).get("code") or {}).get("dirty"),
             )
             persist({"last_iteration": it, "iterations_declared": train_cfg.iterations,
                      "event": "checkpoint"})

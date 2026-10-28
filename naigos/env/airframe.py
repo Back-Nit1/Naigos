@@ -113,10 +113,71 @@ def step(
     return AircraftState(pos=pos, speed=speed, psi=psi, gamma=gamma, phi=phi, fuel=fuel)
 
 
+def step_atmosphere(
+    cfg: AirframeConfig,
+    st: AircraftState,
+    action: jax.Array,
+    dt: float,
+    mean_wind_enu: jax.Array,
+    gust_enu: jax.Array,
+    density_ratio: jax.Array,
+    burn_multiplier: jax.Array | float = 1.0,
+) -> AircraftState:
+    """Opt-in weather transition; legacy ``step`` remains unchanged.
+
+    Air-relative heading and speed produce the aerodynamic velocity.  Only
+    position sees mean wind plus gust.  Density affects three documented
+    quantities: actuator/longitudinal authority scales with ``sqrt(rho/rho0)``,
+    the true-airspeed stall floor scales inversely with it (constant equivalent
+    stall speed), and propulsive fuel demand scales inversely with density.
+    All ratios are bounded because this is an engineering training model, not a
+    full engine deck.
+    """
+    rho = jnp.clip(density_ratio, 0.35, 1.25)
+    authority = jnp.clip(jnp.sqrt(rho), 0.55, 1.10)
+    phi_cmd, gamma_cmd, speed_cmd = decode_action(cfg, action, st.speed)
+    gamma_cmd = gamma_cmd * authority
+
+    phi = st.phi + (phi_cmd - st.phi) * jnp.minimum(dt * authority / cfg.tau_bank, 1.0)
+    gamma = st.gamma + (gamma_cmd - st.gamma) * jnp.minimum(dt * authority / cfg.tau_gamma, 1.0)
+    speed = st.speed + (speed_cmd - st.speed) * jnp.minimum(dt * authority / cfg.tau_speed, 1.0)
+
+    true_stall = cfg.v_stall / jnp.maximum(jnp.sqrt(rho), 0.5)
+    speed = jnp.clip(speed, true_stall, cfg.v_max)
+    gamma = jnp.clip(gamma, -cfg.gamma_max, cfg.gamma_max)
+    psi = st.psi + dt * (G0 * jnp.tan(phi) / jnp.maximum(speed, true_stall))
+    psi = jnp.arctan2(jnp.sin(psi), jnp.cos(psi))
+
+    cg = jnp.cos(gamma)
+    air_vel = jnp.stack(
+        [speed * cg * jnp.cos(psi), speed * cg * jnp.sin(psi), speed * jnp.sin(gamma)], axis=-1
+    )
+    pos = st.pos + dt * (air_vel + mean_wind_enu + gust_enu)
+    pos = pos.at[..., 2].set(jnp.minimum(pos[..., 2], cfg.ceiling))
+
+    throttle = jnp.clip((speed - true_stall) / jnp.maximum(cfg.v_max - true_stall, 1.0), 0.0, 1.0)
+    n = load_factor(phi)
+    propulsive_demand = jnp.clip(1.0 / rho, 0.8, 2.0)
+    burn = (
+        cfg.burn_base
+        + cfg.burn_throttle * throttle * propulsive_demand
+        + cfg.burn_maneuver * jnp.abs(n - 1.0) / authority
+    )
+    fuel = jnp.maximum(st.fuel - dt * burn * burn_multiplier, 0.0)
+    dry = (fuel <= 0.0).astype(jnp.float32)
+    speed = speed * (1 - dry) + jnp.maximum(speed - 5.0 * dt, true_stall) * dry
+    return AircraftState(pos=pos, speed=speed, psi=psi, gamma=gamma, phi=phi, fuel=fuel)
+
+
 def velocity(st: AircraftState) -> jax.Array:
-    """Inertial velocity vector (..., 3)."""
+    """Air-relative velocity vector (..., 3)."""
     cg = jnp.cos(st.gamma)
     return jnp.stack(
         [st.speed * cg * jnp.cos(st.psi), st.speed * cg * jnp.sin(st.psi), st.speed * jnp.sin(st.gamma)],
         axis=-1,
     )
+
+
+def ground_velocity(st: AircraftState, mean_wind_enu: jax.Array, gust_enu: jax.Array) -> jax.Array:
+    """Inertial velocity for the weather model."""
+    return velocity(st) + mean_wind_enu + gust_enu
