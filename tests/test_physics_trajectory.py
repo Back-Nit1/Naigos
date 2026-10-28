@@ -97,4 +97,3 @@ def test_physics_rollout_records_explicit_versioned_evidence(tmp_path):
     environment = reader.metadata.provenance.environment_configuration
     assert environment["environment_model_id"] == "resource-world-v1/urban-vehicle-weather"
     assert environment["environment_identity"]["urban_obstacle_sha256"] == grid.hashes.content_sha256
-

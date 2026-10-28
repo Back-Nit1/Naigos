@@ -59,4 +59,3 @@ def test_scenario_tamper_changes_digest_and_action_contract_fails_closed():
 def test_jsbsim_boundary_is_optional_and_fail_closed(tmp_path):
     with pytest.raises(SixDofUnavailable, match=f"JSBSim {JSBSIM_REQUIRED_VERSION}|model manifest"):
         JSBSimAdapter(tmp_path, {})
-

@@ -120,4 +120,3 @@ def test_physics_policy_filter_logs_reason_bits_under_jit():
     ))(jax.random.PRNGKey(5))
     assert trace["cbf_reason_bits"].shape == (2, 1)
     assert trace["cbf_reason_bits"].dtype == jnp.uint16
-
