@@ -1004,6 +1004,11 @@ async function boot() {
     // one yet. Scrubbing a stream would mean inventing it.
     animation: REPLAY, timeline: REPLAY, shouldAnimate: REPLAY,
     selectionIndicator: false, fullscreenButton: false,
+    // Chrome runs requestAnimationFrame at 120 Hz on ProMotion displays while a live
+    // stream updates at ~5 Hz, so a dense city was redrawn ~20x per new frame. Cap the
+    // loop and the antialiasing; ?fps=60&msaa=4 restores the heavy look.
+    targetFrameRate: Number(new URLSearchParams(location.search).get("fps")) || 30,
+    msaaSamples: Number(new URLSearchParams(location.search).get("msaa")) || 2,
     // The two layers enter the viewer through two different options, from two
     // different sources, and nothing downstream merges them.
     terrainProvider,   // physics: the simulation's DEM
