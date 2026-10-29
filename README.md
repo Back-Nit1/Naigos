@@ -21,12 +21,12 @@ baseline.**
 (`checkpoints/theatre_1000`, shipped). Evaluated on held-out demo seeds, 48 worlds x 4 aircraft, with identical
 seeds and an identical threat field across all four policies:
 
-| | untrained | **trained** | naive direct route | avoid+nap heuristic |
-| --- | --- | --- | --- | --- |
-| sorties surviving | 0.172 | **0.677** | 0.240 | 0.646 |
-| objectives reached | 0.177 | **0.672** | 0.240 | 0.646 |
-| shootdowns (of 192) | 133 | **25** | 134 | 43 |
-| mean detection probability | 0.376 | **0.224** | 0.268 | 0.157 |
+|                            | untrained | **trained** | naive direct route | avoid+nap heuristic |
+| -------------------------- | --------- | ----------- | ------------------ | ------------------- |
+| sorties surviving          | 0.172     | **0.677**   | 0.240              | 0.646               |
+| objectives reached         | 0.177     | **0.672**   | 0.240              | 0.646               |
+| shootdowns (of 192)        | 133       | **25**      | 134                | 43                  |
+| mean detection probability | 0.376     | **0.224**   | 0.268              | 0.157               |
 
 Against the naive direct route: shootdowns fall 5.4x, objectives-reached rise
 2.8x, detection probability falls 0.268 → 0.224 — the tradeoff `prompt.md` asks
@@ -72,16 +72,16 @@ The table above is still the only trained-policy result. Everything below is
 infrastructure on `main`, built so the next result can be measured honestly.
 None of it has produced a published number yet.
 
-| piece | state | where |
-| --- | --- | --- |
-| Held-out route bank + diverse training routes | implemented; no retrained policy | [route-generalization](docs/route-generalization.md) |
-| v2 training protocol (multi-seed, provenance, report) | Phase 1 implemented; Phases 2-4 are design | [spec](docs/superpowers/specs/2026-10-09-v2-training-protocol-phase1-design.md), `scripts/run_protocol_v2.py` |
-| Model ladder: DeepSets v1 (shipped) and DeepSets + GRU-128 | both buildable and checkpointable via `naigos.rl.policies`; GRU has no trained result. Transformer and language planner are plans only | [model-ladder](docs/plans/model-ladder.md), `scripts/model_ladder.py` |
-| Resource world (`baseline-v0` default, `resource-world-v1/endurance` opt-in): fuel, diversion gates, exclusive L1 outcomes, a frozen resource bank and an L1 trace verifier | implemented and tested; baseline behaviour unchanged | [resource-world](docs/plans/resource-world.md), `naigos/env/resource*.py` |
-| Vehicle weather, urban physics and missions (`resource-world-v1/vehicle-weather`, `resource-world-v1/urban-vehicle-weather`) | implemented and opt-in; fast JAX model plus independent NumPy evidence; nonlinear 6-DoF adapter currently fail-closed | [architecture](docs/urban-weather-missions.md), `naigos/env/weather.py`, `naigos/env/urban.py`, `naigos/env/mission.py` |
-| Experiment matrices over policy x theatre x seed x resource preset | planner is inert (no Modal, no credentials); unsupported cells are refused before any job | [model-ladder-matrix](docs/model-ladder-matrix.md) |
-| Trajectory collection (opt-in, off by default) | recorders wired into PPO, evaluators, route/resource banks, pipeline and replay. **Nothing consumes the data**: no behaviour cloning, offline RL or LM training has been done | [TRAJECTORY_DATA](docs/TRAJECTORY_DATA.md), `naigos/trajectory/` |
-| Modal GPU training and scheduled pipeline | audited and fixed locally; **no GPU run yet** | [modal-readiness](docs/plans/modal-readiness.md) |
+| piece                                                                                                                                                                       | state                                                                                                                                                                         | where                                                                                                                   |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| Held-out route bank + diverse training routes                                                                                                                               | implemented; no retrained policy                                                                                                                                              | [route-generalization](docs/route-generalization.md)                                                                    |
+| v2 training protocol (multi-seed, provenance, report)                                                                                                                       | Phase 1 implemented; Phases 2-4 are design                                                                                                                                    | [spec](docs/superpowers/specs/2026-10-09-v2-training-protocol-phase1-design.md), `scripts/run_protocol_v2.py`           |
+| Model ladder: DeepSets v1 (shipped) and DeepSets + GRU-128                                                                                                                  | both buildable and checkpointable via `naigos.rl.policies`; GRU has no trained result. Transformer and language planner are plans only                                        | [model-ladder](docs/plans/model-ladder.md), `scripts/model_ladder.py`                                                   |
+| Resource world (`baseline-v0` default, `resource-world-v1/endurance` opt-in): fuel, diversion gates, exclusive L1 outcomes, a frozen resource bank and an L1 trace verifier | implemented and tested; baseline behaviour unchanged                                                                                                                          | [resource-world](docs/plans/resource-world.md), `naigos/env/resource*.py`                                               |
+| Vehicle weather, urban physics and missions (`resource-world-v1/vehicle-weather`, `resource-world-v1/urban-vehicle-weather`)                                                | implemented and opt-in; fast JAX model plus independent NumPy evidence; nonlinear 6-DoF adapter currently fail-closed                                                         | [architecture](docs/urban-weather-missions.md), `naigos/env/weather.py`, `naigos/env/urban.py`, `naigos/env/mission.py` |
+| Experiment matrices over policy x theatre x seed x resource preset                                                                                                          | planner is inert (no Modal, no credentials); unsupported cells are refused before any job                                                                                     | [model-ladder-matrix](docs/model-ladder-matrix.md)                                                                      |
+| Trajectory collection (opt-in, off by default)                                                                                                                              | recorders wired into PPO, evaluators, route/resource banks, pipeline and replay. **Nothing consumes the data**: no behaviour cloning, offline RL or LM training has been done | [TRAJECTORY_DATA](docs/TRAJECTORY_DATA.md), `naigos/trajectory/`                                                        |
+| Modal GPU training and scheduled pipeline                                                                                                                                   | audited and fixed locally; **no GPU run yet**                                                                                                                                 | [modal-readiness](docs/plans/modal-readiness.md)                                                                        |
 
 ## Command cheat sheet
 
@@ -129,7 +129,7 @@ lsof -ti :8765 | xargs kill                        # stop the old viewer, or use
 # the evidence-grade 3D view: the simulation's own DEM as the terrain mesh,
 # Sentinel-2 as the skin if NAIGOS_CESIUM_ION_TOKEN is set, OpenStreetMap if not
 export NAIGOS_CESIUM_ION_TOKEN=...        # optional; never put it on the command line
-uv run python -m naigos.demo.live --aoi tehran_basin \
+uv run python -m naigos.demo.live --aoi rantehran_basin \
     --checkpoint checkpoints/theatre_1000 --visual physics --imagery sentinel2 --open
 ```
 
@@ -181,21 +181,21 @@ why the cited specs are committed while their raw artifacts are not.
 
 The globe is **two layers, and they are not interchangeable**:
 
-| layer | source | role |
-| ----- | ------ | ---- |
+| layer                     | source                                                 | role                                                                                                                |
+| ------------------------- | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------- |
 | **terrain** — the physics | the simulation's own heightmap, served from `/terrain` | The surface every line-of-sight ray was computed against, and the only elevation data the detection model consumes. |
-| **imagery** — the skin | Copernicus Sentinel-2, Cesium ion asset 3954 | Cosmetic. Makes the scene read as real geography. **No satellite pixel ever enters an observation.** |
+| **imagery** — the skin    | Copernicus Sentinel-2, Cesium ion asset 3954           | Cosmetic. Makes the scene read as real geography. **No satellite pixel ever enters an observation.**                |
 
 (That table describes the default `--visual physics`. The optional
 `--visual photorealistic` mode replaces the surface with Google's 3D Tiles and is
-explicitly *not* evidence — see [below](#two-visual-modes-and-only-one-of-them-is-evidence).)
+explicitly _not_ evidence — see [below](#two-visual-modes-and-only-one-of-them-is-evidence).)
 
-The split is the point. The globe's relief is *evidence* — take it from an
+The split is the point. The globe's relief is _evidence_ — take it from an
 imagery provider and the viewer is illustrating terrain masking rather than
 demonstrating it, which is a defect this repo already shipped once
 ([next-steps.md](next-steps.md) E-9). Press **imagery** in the layer panel to
 strip the skin off: the relief, the hillshade and every LOS ray stay exactly
-where they were. `tests/test_imagery_layers.py` asserts that no ion *terrain*
+where they were. `tests/test_imagery_layers.py` asserts that no ion _terrain_
 provider is ever constructed and that nothing under `naigos/env` or `naigos/rl`
 so much as names imagery.
 
@@ -310,14 +310,14 @@ separation visible in the browser.
 ### Three visual modes, and only one of them is evidence
 
 `--visual` picks between three whole postures. They differ in what the drawn
-surface *is*, and what stands on it, which is why this is a mode and not another
+surface _is_, and what stands on it, which is why this is a mode and not another
 imagery option:
 
-| `--visual` | surface | on it | skin | evidence? |
-| ---------- | ------- | ----- | ---- | --------- |
-| `physics` **(default)** | the simulation's own DEM, from `/terrain` | nothing | Sentinel-2 or OpenStreetMap | **yes** — what occludes on screen occluded in the model |
-| `photorealistic` | Google Photorealistic 3D Tiles (their geometry) | Google's buildings | the tileset's own texture, over OSM | **no** |
-| `urban-presentation` | Google 3D Tiles with a credential; otherwise the simulation's DEM | Google's buildings, or extruded OpenStreetMap buildings and roads from a local cache | OSM | **no** |
+| `--visual`              | surface                                                           | on it                                                                                | skin                                | evidence?                                               |
+| ----------------------- | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------- | ------------------------------------------------------- |
+| `physics` **(default)** | the simulation's own DEM, from `/terrain`                         | nothing                                                                              | Sentinel-2 or OpenStreetMap         | **yes** — what occludes on screen occluded in the model |
+| `photorealistic`        | Google Photorealistic 3D Tiles (their geometry)                   | Google's buildings                                                                   | the tileset's own texture, over OSM | **no**                                                  |
+| `urban-presentation`    | Google 3D Tiles with a credential; otherwise the simulation's DEM | Google's buildings, or extruded OpenStreetMap buildings and roads from a local cache | OSM                                 | **no**                                                  |
 
 Photorealistic is the better-looking globe and it establishes nothing. Google's
 3D Tiles bring their own geometry — buildings, trees, provider relief — so the
@@ -369,7 +369,7 @@ The mode has two ways to get its buildings:
    `NAIGOS_GOOGLE_MAPS_API_KEY` set, it draws Google Photorealistic 3D Tiles
    through the same mechanism, attribution and warning banner as
    `--visual photorealistic`. The HUD says **provider buildings active** only
-   once the tileset has loaded a tile *and* put it on screen, based on what the
+   once the tileset has loaded a tile _and_ put it on screen, based on what the
    renderer observed (`tileLoad` and `tileVisible`). A token being present, or the
    tileset object existing, does not count. If the tiles fail, the page falls
    back to the local layer.
@@ -401,12 +401,14 @@ asks for civilian buildings only: military-tagged buildings and anything inside
 `landuse=military` are excluded, plus motorway-to-tertiary roads. Everything is
 cached under `data_cache/visual/urban/tehran_basin/`, outside the research
 manifest:
+
 - the raw response, byte for byte
 - the derived browser payload
 - `provenance.json`: URL, query digest, fetch time, sha256 of both files, licence
 
 A second run makes no network call. `--offline` refuses to fetch, and `--force`
 refetches. The browser payload carries only three things:
+
 - exterior rings (quantised to 1e-6°, delta-encoded)
 - one height per building
 - a 3-class road type
@@ -420,6 +422,7 @@ buildings and roads © OpenStreetMap contributors, ODbL, shown on screen whereve
 they are drawn. The data cache is git-ignored, so no OSM-derived data is committed.
 
 **Performance.** For a normal laptop browser:
+
 - The page builds the nearest 14,000 buildings first.
 - More chunks load near wherever the camera settles, up to 90,000.
 - Chunks beyond max(16 km, 3× camera height) are hidden.
@@ -438,6 +441,7 @@ against the DEM and its protected zones (see [City theatres](#city-theatres-one-
 `analysis-topdown` behave as in physics mode. All five are in every mode's HUD.
 
 `--smoke-render` reports the city configuration without rendering anything:
+
 - mode and evidence grade
 - imagery
 - requested vs actual geometry source
@@ -453,8 +457,7 @@ against the DEM and its protected zones (see [City theatres](#city-theatres-one-
 Every city theatre -- Tehran, and any added beside it -- is presented under one
 shared standard, documented in [docs/theatres/](docs/theatres/README.md):
 
-- **Framing.** The HUD opens with `scenario: notional contested-airspace
-  simulation` and says whether the checkpoint was trained on this theatre or is
+- **Framing.** The HUD opens with `scenario: notional contested-airspace simulation` and says whether the checkpoint was trained on this theatre or is
   flying it **zero-shot**. The shipped checkpoint was trained on Owens Valley, so
   every city view says zero-shot.
 - **Atmosphere.** `--atmosphere auto` gives a presentation mode the theatre's
@@ -490,7 +493,7 @@ a key on argv is a key in the shell history.
 
 Nothing token-shaped is retained anywhere. `VisualConfig` — the public
 configuration object the server prints, serves at `/scene` and hands to the page
-— records only *whether* each credential was found, so it can be logged or pasted
+— records only _whether_ each credential was found, so it can be logged or pasted
 into an issue without leaking one. Each credential reaches the browser through
 exactly one substitution point, which is what makes "is there a secret in this
 response" a grep rather than an audit.
@@ -501,12 +504,12 @@ non-commercial use, which is what this is.
 
 **Not Cesium's default imagery.** That default is Bing Aerial — third-party
 commercial data, metered by session, under Microsoft's terms rather than
-Cesium's. Sentinel-2 is ESA/Copernicus open data: free to *use*, not merely free
+Cesium's. Sentinel-2 is ESA/Copernicus open data: free to _use_, not merely free
 to look at. For a portfolio project that removes the licensing question rather
 than answering it.
 
-**Attribution**, required by Cesium ion's Content Usage guide: *Contains modified
-Copernicus Sentinel data. Imagery served by Cesium ion, asset 3954.* CesiumJS
+**Attribution**, required by Cesium ion's Content Usage guide: _Contains modified
+Copernicus Sentinel data. Imagery served by Cesium ion, asset 3954._ CesiumJS
 emits the authoritative per-provider credit into its own credit display
 bottom-right, which the viewer deliberately leaves visible; the HUD restates it
 so a screenshot carries it too.
@@ -518,12 +521,12 @@ is now re-rolled on a cadence and the viewer rebuilds its envelopes to match.
 
 ### Theatres
 
-| AOI | terrain | DEM source |
-| --- | ------- | ---------- |
-| `owens_valley` | Sierra crest / valley floor, 345–4077 m | USGS 3DEP 30 m |
-| `tehran_basin` | Central Alborz over an urban basin. North third mean 2880 m, south third mean 1202 m — 3.5 km of relief over ~15 km, a steeper gradient than Owens Valley | Copernicus GLO-30 |
-| `dubai_urban` | Flat Gulf-coast city and inland dunes, 81 x 37 km, -17 to 205 m. Almost no terrain masking: the radar horizon (curvature over the measured refraction) carries the geometry. [Notes](docs/theatres/dubai_urban.md) | Copernicus GLO-30 |
-| `mecca_urban` | Rugged Hijaz foothills and outer districts west of the city, 50 x 59 km, 9–765 m. The Masjid al-Haram precinct and the pilgrimage venues lie outside the box and are protected zones. [Notes](docs/theatres/mecca_urban.md) | Copernicus GLO-30 |
+| AOI            | terrain                                                                                                                                                                                                                     | DEM source        |
+| -------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------- |
+| `owens_valley` | Sierra crest / valley floor, 345–4077 m                                                                                                                                                                                     | USGS 3DEP 30 m    |
+| `tehran_basin` | Central Alborz over an urban basin. North third mean 2880 m, south third mean 1202 m — 3.5 km of relief over ~15 km, a steeper gradient than Owens Valley                                                                   | Copernicus GLO-30 |
+| `dubai_urban`  | Flat Gulf-coast city and inland dunes, 81 x 37 km, -17 to 205 m. Almost no terrain masking: the radar horizon (curvature over the measured refraction) carries the geometry. [Notes](docs/theatres/dubai_urban.md)          | Copernicus GLO-30 |
+| `mecca_urban`  | Rugged Hijaz foothills and outer districts west of the city, 50 x 59 km, 9–765 m. The Masjid al-Haram precinct and the pilgrimage venues lie outside the box and are protected zones. [Notes](docs/theatres/mecca_urban.md) | Copernicus GLO-30 |
 
 Each AOI has its own component snapshot under `components/aoi/<name>/`, so
 running the research agent for one theatre cannot silently invalidate a
@@ -722,7 +725,7 @@ producing it and the fate of the job that produced it cannot drift apart:
 
 - `run.json` — written **once**. Profile, sizes, seed, theatre, git commit and
   whether the tree was dirty, plus the device the run actually got. Pointing a
-  *different* configuration at an existing run directory is refused rather than
+  _different_ configuration at an existing run directory is refused rather than
   allowed to interleave two runs' checkpoints.
 - `perf.json` — device and backend, first-iteration wall time labelled as
   compile-plus-one-step, median and p90 seconds per iteration, env-steps/s,
@@ -735,7 +738,7 @@ producing it and the fate of the job that produced it cannot drift apart:
   `run.json` can stay immutable: Modal job id, run name, submitted/started/
   finished timestamps, requested GPU, the backend and device actually obtained,
   code commit, status, termination reason, and one entry per attempt. A remote
-  run that times out records *why* here without its identity record changing.
+  run that times out records _why_ here without its identity record changing.
 
 Checkpoints (`ckpt_NNNNNN/`, an Orbax directory -- see next-steps.md G-3) carry
 the policy where the demo has always read it, plus a `recovery` block holding
@@ -824,14 +827,14 @@ surface in minutes, not six hours in. It answers six questions by name and
 records each answer in the run's manifest, so a smoke run that "completed"
 without proving one of them does not arm the gate:
 
-| check | what it rules out |
-| ----- | ----------------- |
-| `image` | the remote image built but cannot import the training stack |
-| `gpu_backend` | JAX silently resolved CPU — the way a CPU number gets published as a GPU number |
-| `data_cache` | the cited cache did not travel with the image, so the theatre would be fabricated |
-| `volume_write` | the Volume is not mounted or not writable, so nothing survives the container |
-| `checkpoint` | a checkpoint was written but does not read back with recovery state |
-| `artifact_fetch` | the run directory is not complete enough to retrieve and verify |
+| check            | what it rules out                                                                 |
+| ---------------- | --------------------------------------------------------------------------------- |
+| `image`          | the remote image built but cannot import the training stack                       |
+| `gpu_backend`    | JAX silently resolved CPU — the way a CPU number gets published as a GPU number   |
+| `data_cache`     | the cited cache did not travel with the image, so the theatre would be fabricated |
+| `volume_write`   | the Volume is not mounted or not writable, so nothing survives the container      |
+| `checkpoint`     | a checkpoint was written but does not read back with recovery state               |
+| `artifact_fetch` | the run directory is not complete enough to retrieve and verify                   |
 
 ```bash
 uv run python scripts/modal_runs.py submit --profile smoke   # 3 iterations, minutes
@@ -839,11 +842,11 @@ uv run python scripts/modal_runs.py submit --profile short   # 200 iterations
 uv run python scripts/modal_runs.py submit --profile full    # 3000 iterations
 ```
 
-| profile | iterations | worlds x steps | terrain cells | checkpoint every | what it is for |
-| ------- | ---------- | -------------- | ------------- | ---------------- | -------------- |
-| `smoke` | 3 | 16 x 32 | 1500 m | 3 | prove the image, the GPU, the cache mount and the Volume in minutes |
-| `short` | 200 | 128 x 128 | 500 m | 50 | a readable learning curve and a throughput number |
-| `full` | 3000 | 256 x 128 | 500 m | 200 | the run [next-steps.md](next-steps.md) C-2 asks for |
+| profile | iterations | worlds x steps | terrain cells | checkpoint every | what it is for                                                      |
+| ------- | ---------- | -------------- | ------------- | ---------------- | ------------------------------------------------------------------- |
+| `smoke` | 3          | 16 x 32        | 1500 m        | 3                | prove the image, the GPU, the cache mount and the Volume in minutes |
+| `short` | 200        | 128 x 128      | 500 m         | 50               | a readable learning curve and a throughput number                   |
+| `full`  | 3000       | 256 x 128      | 500 m         | 200              | the run [next-steps.md](next-steps.md) C-2 asks for                 |
 
 `short` and `full` run at 500 m cells, the fidelity every published number is
 measured at.
@@ -856,18 +859,18 @@ training got — but a container that is killed never gets to update it, so a
 stale `running` is its normal failure mode. Modal's call state knows the
 container is gone but not whether anything was persisted first.
 
-| state | meaning |
-| ----- | ------- |
-| `queued` | submitted, no container yet |
-| `running` | a worker is writing, with a recent heartbeat |
-| `completed` | the worker finished and said so |
-| `timed_out` | the job exceeded its timeout; artifacts committed so far survive |
-| `failed` | the worker raised, or the job was reaped |
-| `cancelled` | stopped on purpose (`modal_runs.py cancel`) |
-| `unknown` | no heartbeat for an hour and Modal reported nothing — a claim the evidence does not support |
+| state       | meaning                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------- |
+| `queued`    | submitted, no container yet                                                                 |
+| `running`   | a worker is writing, with a recent heartbeat                                                |
+| `completed` | the worker finished and said so                                                             |
+| `timed_out` | the job exceeded its timeout; artifacts committed so far survive                            |
+| `failed`    | the worker raised, or the job was reaped                                                    |
+| `cancelled` | stopped on purpose (`modal_runs.py cancel`)                                                 |
+| `unknown`   | no heartbeat for an hour and Modal reported nothing — a claim the evidence does not support |
 
 `resumable` is reported alongside as a separate flag, not as a seventh state: a
-run can be timed out *and* resumable, or failed and *not* resumable because it
+run can be timed out _and_ resumable, or failed and _not_ resumable because it
 died before its first checkpoint. It means recovery state exists on the Volume,
 which is a different question from how the run ended.
 
@@ -879,7 +882,7 @@ per attempt.
 #### Resuming
 
 Checkpoints carry complete recovery state: both sets of network parameters, both
-optimizer states, the Lagrange multiplier *and its optimizer state*, the RNG
+optimizer states, the Lagrange multiplier _and its optimizer state_, the RNG
 key, the iteration, the red-curriculum level, the measured rates that drive the
 reward curriculum, and the accumulated history. Dropping any one of them turns a
 "resume" into a differently-configured continuation that still reports as one
@@ -891,7 +894,7 @@ uv run python scripts/modal_runs.py resume <run-name>
 uv run python scripts/train_local.py --out runs/local --resume     # locally
 ```
 
-Resume loads the most recent *valid* checkpoint from the run's own Volume
+Resume loads the most recent _valid_ checkpoint from the run's own Volume
 directory — walking backwards, because the newest file is exactly the one a
 killed container was most likely mid-write on — and continues from the next
 iteration. It is refused if the code commit, profile, seed, theatre, agent
@@ -912,13 +915,13 @@ one is a test, not a claim (`tests/test_resume.py`).
 
 #### Budget defaults
 
-| knob | default | why |
-| ---- | ------- | --- |
-| GPU | `A10G` | cheapest current card that fits the model; the bottleneck is expected to be the batched rollout, which `perf.json` will confirm or refute |
-| timeout (long) | 6 h | `NAIGOS_MODAL_TIMEOUT_S` |
-| timeout (smoke) | 30 min | `NAIGOS_MODAL_SMOKE_TIMEOUT_S` — a hung plumbing check must not bill six hours |
-| retries | **0** | `NAIGOS_MODAL_RETRIES`. Modal's retry restarts from scratch, so an automatic retry of a long run pays for the same iterations twice and puts a second writer in one run directory. Resume is an operator decision made against a named checkpoint |
-| checkpoint cadence | per profile | the ceiling on how much GPU time a crash can destroy |
+| knob               | default     | why                                                                                                                                                                                                                                               |
+| ------------------ | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GPU                | `A10G`      | cheapest current card that fits the model; the bottleneck is expected to be the batched rollout, which `perf.json` will confirm or refute                                                                                                         |
+| timeout (long)     | 6 h         | `NAIGOS_MODAL_TIMEOUT_S`                                                                                                                                                                                                                          |
+| timeout (smoke)    | 30 min      | `NAIGOS_MODAL_SMOKE_TIMEOUT_S` — a hung plumbing check must not bill six hours                                                                                                                                                                    |
+| retries            | **0**       | `NAIGOS_MODAL_RETRIES`. Modal's retry restarts from scratch, so an automatic retry of a long run pays for the same iterations twice and puts a second writer in one run directory. Resume is an operator decision made against a named checkpoint |
+| checkpoint cadence | per profile | the ceiling on how much GPU time a crash can destroy                                                                                                                                                                                              |
 
 `--gpu` is not a flag because Modal fixes it at decoration time; set
 `NAIGOS_MODAL_GPU` before `modal deploy`.
@@ -981,32 +984,32 @@ reuse the wrong terrain.
 
 ## What is real
 
-| claim | status |
-| ----- | ------ |
-| Terrain | Real. USGS 3DEP 30 m over Owens Valley, reprojected to UTM 11N, 345–4077 m of relief in the flown window. Cached, sha256'd, cited. |
-| Radar detection | Derived from the monostatic radar range equation with Swerling-1 fluctuation. No product data sheet anywhere in the repo. |
-| Atmosphere | Real. Open-Meteo pressure profile gives a *measured* effective-earth factor k = 1.256, not the textbook 4/3. |
-| Airframe speeds and climb | Calibrated from 1654 OpenSky ADS-B states. |
-| Airframe g-limit and tactical climb | **Assumed**, and labelled `ASSUMED_*` in `theatre_bridge.py`. Civil traffic never manoeuvres hard, so no open civil dataset can supply these. |
-| Threat envelopes | **Parameterised abstractions** — a range, an altitude band, a reaction latency, a Pd curve. Not a capability database, by design (see the guardrail below). |
-| Globe terrain | Real, and it is the **same surface the model used** — `/terrain` serves the env's own heightmap, verified against `sample_height` to mean 1.65 m. Hillshade is derived from that same array. |
-| Globe imagery | Real Sentinel-2 optical imagery (Copernicus, via Cesium ion asset 3954) — and **decorative**. A separate layer from the terrain, establishing nothing, never observed by the policy. The optional `--visual photorealistic` mode goes further and replaces the drawn *surface* with Google's 3D Tiles; it is labelled non-evidential in the config, in the HUD and on stdout. |
-| City buildings | Real OpenStreetMap footprints and roads (ODbL), extruded to heights from their `height`/`building:levels` tags or a documented fallback — **presentation only** (`--visual urban-presentation`). Never terrain, never radar cover, never read by LOS, detection or the policy. |
-| Training | Real MAPPO-Lagrangian runs with a reproducible learning curve, on CPU (1000 iterations). Every run records its device, iteration time, throughput and peak memory to `perf.json`. **No GPU run yet, so no GPU or speedup number is claimed anywhere in this repo.** |
-| CBF backstop | Implemented and wired behind `--cbf`. On the committed held-out artifact it removes trained-policy terrain losses (15 → 0), but costs objective rate (0.672 → 0.240). QP infeasibility (0.227) is reported, not hidden. |
-| Recurrent actor (GRU-128) | Implemented and checkpoint-tested, including hidden-state reset on world reroll in the live demo. **Untrained**: no result in this repo comes from it. |
-| Resource world | `baseline-v0` is the default and leaves the shipped checkpoint's pytree contract unchanged (tested). `resource-world-v1/endurance` is opt-in; its envelopes are initial experiment ranges, not calibrated facts. |
-| Vehicle weather + urban missions | Opt-in deterministic engineering simulation. Gusts are a bounded AR(1) surrogate, obstacle wake is not CFD, and anonymous missions are procedural. The physics obstacle artifact is separate from visual buildings. No learned performance result is claimed. |
-| 6-DoF validation | Deterministic interface and maneuver fixtures are implemented. A real nonlinear run is unavailable/fail-closed until JSBSim 1.2.3 and a hash-pinned generic aircraft model are supplied offline. The fast trainer is not called 6-DoF. |
-| Trajectory data | Format and recorders are real and tested; recording is off by default and nothing downstream trains on it. |
-| Learned red / self-play | **Not implemented.** `LearnedRedStub` raises rather than falling back. |
+| claim                               | status                                                                                                                                                                                                                                                                                                                                                                        |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Terrain                             | Real. USGS 3DEP 30 m over Owens Valley, reprojected to UTM 11N, 345–4077 m of relief in the flown window. Cached, sha256'd, cited.                                                                                                                                                                                                                                            |
+| Radar detection                     | Derived from the monostatic radar range equation with Swerling-1 fluctuation. No product data sheet anywhere in the repo.                                                                                                                                                                                                                                                     |
+| Atmosphere                          | Real. Open-Meteo pressure profile gives a _measured_ effective-earth factor k = 1.256, not the textbook 4/3.                                                                                                                                                                                                                                                                  |
+| Airframe speeds and climb           | Calibrated from 1654 OpenSky ADS-B states.                                                                                                                                                                                                                                                                                                                                    |
+| Airframe g-limit and tactical climb | **Assumed**, and labelled `ASSUMED_*` in `theatre_bridge.py`. Civil traffic never manoeuvres hard, so no open civil dataset can supply these.                                                                                                                                                                                                                                 |
+| Threat envelopes                    | **Parameterised abstractions** — a range, an altitude band, a reaction latency, a Pd curve. Not a capability database, by design (see the guardrail below).                                                                                                                                                                                                                   |
+| Globe terrain                       | Real, and it is the **same surface the model used** — `/terrain` serves the env's own heightmap, verified against `sample_height` to mean 1.65 m. Hillshade is derived from that same array.                                                                                                                                                                                  |
+| Globe imagery                       | Real Sentinel-2 optical imagery (Copernicus, via Cesium ion asset 3954) — and **decorative**. A separate layer from the terrain, establishing nothing, never observed by the policy. The optional `--visual photorealistic` mode goes further and replaces the drawn _surface_ with Google's 3D Tiles; it is labelled non-evidential in the config, in the HUD and on stdout. |
+| City buildings                      | Real OpenStreetMap footprints and roads (ODbL), extruded to heights from their `height`/`building:levels` tags or a documented fallback — **presentation only** (`--visual urban-presentation`). Never terrain, never radar cover, never read by LOS, detection or the policy.                                                                                                |
+| Training                            | Real MAPPO-Lagrangian runs with a reproducible learning curve, on CPU (1000 iterations). Every run records its device, iteration time, throughput and peak memory to `perf.json`. **No GPU run yet, so no GPU or speedup number is claimed anywhere in this repo.**                                                                                                           |
+| CBF backstop                        | Implemented and wired behind `--cbf`. On the committed held-out artifact it removes trained-policy terrain losses (15 → 0), but costs objective rate (0.672 → 0.240). QP infeasibility (0.227) is reported, not hidden.                                                                                                                                                       |
+| Recurrent actor (GRU-128)           | Implemented and checkpoint-tested, including hidden-state reset on world reroll in the live demo. **Untrained**: no result in this repo comes from it.                                                                                                                                                                                                                        |
+| Resource world                      | `baseline-v0` is the default and leaves the shipped checkpoint's pytree contract unchanged (tested). `resource-world-v1/endurance` is opt-in; its envelopes are initial experiment ranges, not calibrated facts.                                                                                                                                                              |
+| Vehicle weather + urban missions    | Opt-in deterministic engineering simulation. Gusts are a bounded AR(1) surrogate, obstacle wake is not CFD, and anonymous missions are procedural. The physics obstacle artifact is separate from visual buildings. No learned performance result is claimed.                                                                                                                 |
+| 6-DoF validation                    | Deterministic interface and maneuver fixtures are implemented. A real nonlinear run is unavailable/fail-closed until JSBSim 1.2.3 and a hash-pinned generic aircraft model are supplied offline. The fast trainer is not called 6-DoF.                                                                                                                                        |
+| Trajectory data                     | Format and recorders are real and tested; recording is off by default and nothing downstream trains on it.                                                                                                                                                                                                                                                                    |
+| Learned red / self-play             | **Not implemented.** `LearnedRedStub` raises rather than falling back.                                                                                                                                                                                                                                                                                                        |
 
 ## The guardrail
 
 Threat envelopes are parameterised abstractions built from open physics and
 nominal open figures for generic classes of system. This repository does not
 contain, and does not need, a current or targeting-grade capability database:
-the RL problem depends on the *shape* of the exposure-versus-survival tradeoff,
+the RL problem depends on the _shape_ of the exposure-versus-survival tradeoff,
 not on real-world accuracy against any fielded system. The research agent's
 allowlist refuses requests that drift that way
 (`naigos/research/allowlist.py::check_request`).
