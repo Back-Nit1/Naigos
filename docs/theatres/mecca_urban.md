@@ -62,10 +62,7 @@ Provenance: [`mecca_urban/DATA.md`](mecca_urban/DATA.md); components in
 | input | source | licence |
 | --- | --- | --- |
 | terrain | Copernicus DEM GLO-30 (AWS open-data COG) | Copernicus DEM licence; attribution required |
-| atmosphere | Open-Meteo forecast at the AOI centre | CC BY 4.0 |
 | airfields | OurAirports (none inside the box) | public domain |
-| flight envelope | OpenSky (shared calibration sample) | OpenSky terms, non-commercial |
-| city layer (visual only) | OpenStreetMap via Overpass, `naigos.demo.urban` | ODbL 1.0 -- (c) OpenStreetMap contributors |
 
 Measured: 9--765 m (756 m relief), mean slope 5.6 deg; 16.1% of points masked at
 100 m AGL from the high point, 6.0% at 300 m -- many short ridges, masking close
@@ -102,29 +99,10 @@ retries rather than caching it.)
 
 ## Commands
 
-```bash
-uv run naigos-research --aoi mecca_urban
-uv run python -m naigos.demo.urban --aoi mecca_urban
+Run, record and replay it with the [shared commands](README.md#commands-for-any-theatre-aoi), `<aoi>` = `mecca_urban`.
 
-# Evidence-grade model terrain/LOS
-uv run python -m naigos.demo.live --aoi mecca_urban \
-  --checkpoint checkpoints/theatre_1000 --visual physics --camera valley-overview --open
-
-# Presentation-only dense city scene
-uv run python -m naigos.demo.live --aoi mecca_urban \
-  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
-  --camera urban-overview --open
-
-# ... with the restrained fictional ambience
-uv run python -m naigos.demo.live --aoi mecca_urban \
-  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
-  --camera urban-overview --ambience conflict_ambience --ambience-setting sparse --visual-seed 7 --open
-
-# A recording and its self-contained replay
-uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000 \
-  --aoi mecca_urban --worlds 8 --world 1 --out runs/mecca_urban
-uv run python -m naigos.demo.viewer runs/mecca_urban/demo.json --visual urban-presentation --open
-```
+Mecca-specific flags: open the physics view with `--camera valley-overview`, and keep the
+ambience restrained with `--ambience conflict_ambience --ambience-setting sparse`.
 
 ## Limitations
 

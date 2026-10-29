@@ -37,10 +37,6 @@ All inputs come through the allowlisted, cached, cited research pipeline
 | input | source | licence |
 | --- | --- | --- |
 | terrain | Copernicus DEM GLO-30 (AWS open-data COG, windowed read) | Copernicus DEM licence; attribution required |
-| atmosphere | Open-Meteo forecast at the AOI centre | CC BY 4.0 |
-| civil airfields | OurAirports | public domain |
-| flight envelope | OpenSky (shared calibration sample) | OpenSky terms, non-commercial |
-| city layer (visual only) | OpenStreetMap via Overpass, `naigos.demo.urban` | ODbL 1.0 -- (c) OpenStreetMap contributors |
 
 Measured: 41.5 m mean elevation, 221 m relief (inland dunes and the DSM's
 structure signal), mean slope 1.6 deg. Terrain masking is nearly absent (3.8%
@@ -81,30 +77,7 @@ within 25 m at the point the request named.
 
 ## Commands
 
-```bash
-uv run naigos-research --aoi dubai_urban
-uv run python -m naigos.demo.urban --aoi dubai_urban
-
-# Evidence-grade terrain/LOS viewer.
-uv run python -m naigos.demo.live --aoi dubai_urban \
-  --checkpoint checkpoints/theatre_1000 --visual physics --camera urban-overview --open
-
-# Dense city presentation; never LOS evidence.
-uv run python -m naigos.demo.live --aoi dubai_urban \
-  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
-  --camera urban-overview --open
-
-# ... with the fictional ambience.
-uv run python -m naigos.demo.live --aoi dubai_urban \
-  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
-  --camera urban-overview --ambience conflict_ambience --visual-seed 7 --open
-
-# A recording and its self-contained replay.
-uv run python -m naigos.demo.replay --checkpoint checkpoints/theatre_1000 \
-  --aoi dubai_urban --worlds 8 --world 1 --out runs/dubai_urban
-uv run python -m naigos.demo.viewer runs/dubai_urban/demo.json --visual urban-presentation \
-  --ambience conflict_ambience --visual-seed 7 --open
-```
+Run, record and replay it with the [shared commands](README.md#commands-for-any-theatre-aoi), `<aoi>` = `dubai_urban`.
 
 No Dubai training command is added: the offline and cloud candidate workflows
 take `--aoi`, and a Dubai run through them would record its theatre in

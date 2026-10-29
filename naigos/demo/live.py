@@ -108,6 +108,10 @@ LIVE_EVENT_BUFFER = 48
 
 
 
+# Eager `sample_height` dispatches ~30 XLA ops per call; the viewer calls it every step.
+_ground_m = jax.jit(sample_height, static_argnums=1)
+
+
 def build_terrain_grid(hmap, tcfg, georef: GeoRef, geo_bounds: dict, n: int = 512):
     """Resample the env's OWN heightmap onto a regular lat/lon grid.
 
@@ -134,7 +138,7 @@ def build_terrain_grid(hmap, tcfg, georef: GeoRef, geo_bounds: dict, n: int = 51
     lo, la = np.meshgrid(lons, lats)
     x, y = georef.from_wgs84(lo, la)
 
-    h = np.asarray(sample_height(jnp.asarray(hmap), tcfg, jnp.asarray(x), jnp.asarray(y)))
+    h = np.asarray(_ground_m(jnp.asarray(hmap), tcfg, jnp.asarray(x), jnp.asarray(y)))
     inside = (x >= 0) & (x <= tcfg.extent_x) & (y >= 0) & (y <= tcfg.extent_y)
 
     meta = {
@@ -194,8 +198,8 @@ def threat_state_series(georef: GeoRef, hmap, tcfg, tpos, tpsi, active, track, b
     S, T = tpos.shape[:2]
     idx = (np.arange(T) if active is None
            else np.flatnonzero(np.asarray(active, dtype=bool)))
-    ground = np.asarray(sample_height(jnp.asarray(hmap), tcfg,
-                                      jnp.asarray(tpos[..., 0]), jnp.asarray(tpos[..., 1])))
+    ground = np.asarray(_ground_m(jnp.asarray(hmap), tcfg,
+                                  jnp.asarray(tpos[..., 0]), jnp.asarray(tpos[..., 1])))
     lon, lat = (np.asarray(v).reshape(S, T) for v in georef.to_wgs84(tpos[..., 0], tpos[..., 1]))
     heading = np.asarray(att_mod.true_heading_deg(
         georef.to_wgs84, tpos[..., 0], tpos[..., 1], tpsi)).reshape(S, T)
@@ -527,6 +531,7 @@ class Simulation:
         self._step = jax.jit(
             self._raw_step if self.policy_memory is None else self._raw_recurrent_step
         )
+        self._track = self._build_tracker()
         self._respawn = jax.jit(self.env.respawn)
         self._reroll = jax.jit(self.env.reroll_threats)
         self._next_reroll = self.reroll_s
@@ -658,7 +663,7 @@ class Simulation:
         b = jax.device_get(before)
         a = jax.device_get(after)
         trk = self._tracking(a)
-        p_kill = np.asarray(per_threat_params(cfg, a.threats.kind)["p_kill"], dtype=np.float64)
+        p_kill = trk["p_kill"].astype(np.float64)
         evs = self.events.step(
             step=self.tick, t_s=self.sim_t,
             in_flight=np.asarray(b.alive) & ~np.asarray(b.reached),
@@ -673,6 +678,38 @@ class Simulation:
         for ev in evs:
             self._event_log.append(geo_event(self.georef, ev))
 
+    def _build_tracker(self):
+        """Jit the whole tracker selection once: pd, best emitter, its ray's clearance and ground.
+
+        These ran as ~150 eager XLA dispatches per step (60% of a live step). The maths is
+        unchanged; only the dispatch is fused.
+        """
+        cfg = self.env.cfg
+        s = jnp.asarray(los_mod.sample_fractions(cfg.detection.los_samples))
+
+        @jax.jit
+        def track(hmap, pos, psi, tpos, kind, active):
+            tparams = per_threat_params(cfg, kind)
+            det = det_mod.detection_probability(
+                hmap, cfg.terrain, cfg.detection, pos, psi, tpos, tparams, active)
+            pd, slant = det["pd"], det["slant"]
+            rank = jnp.where(active[:, None], pd + 1e-6 / jnp.maximum(slant, 1.0), -1.0)
+            tracker = jnp.argmax(rank, axis=0)
+            emitter = tpos[tracker] + jnp.array([0.0, 0.0, 10.0])
+            seg = pos - emitter
+            ray_ground = sample_height(
+                hmap, cfg.terrain,
+                emitter[:, None, 0] + s * seg[:, None, 0],
+                emitter[:, None, 1] + s * seg[:, None, 1])
+            return {
+                "tracker": tracker, "emitter_enu": emitter, "pd": pd, "ray_ground": ray_ground,
+                "clearance": terrain_mod.los_clearance(
+                    hmap, cfg.terrain, cfg.detection, emitter, pos),
+                "p_kill": tparams["p_kill"],
+            }
+
+        return track
+
     def _tracking(self, st) -> dict:
         """Which threat's ray to draw for each aircraft, and whether terrain cuts it.
 
@@ -682,30 +719,9 @@ class Simulation:
         you if the ridge were not there. pd already carries the LOS term, so
         fall back to geometric proximity when nothing can see the aircraft.
         """
-        cfg = self.env.cfg
-        pos = np.asarray(st.air.pos)
-        tpos = np.asarray(st.threats.pos)
-        tparams = per_threat_params(cfg, st.threats.kind)
-        det = det_mod.detection_probability(
-            jnp.asarray(st.hmap), cfg.terrain, cfg.detection,
-            jnp.asarray(pos), jnp.asarray(np.asarray(st.air.psi)),
-            jnp.asarray(tpos), tparams, jnp.asarray(np.asarray(st.threats.active)),
-        )
-        pd_arr = np.asarray(det["pd"])
-        slant = np.asarray(det["slant"])
-        active = np.asarray(st.threats.active)
-        # rank: any real detection wins; otherwise the nearest active threat
-        rank = np.where(active[:, None], pd_arr + 1e-6 / np.maximum(slant, 1.0), -1.0)
-        tracker = rank.argmax(axis=0)
-        emitter_enu = tpos[tracker] + np.array([0.0, 0.0, 10.0])
-        clearance = np.asarray(
-            terrain_mod.los_clearance(
-                jnp.asarray(st.hmap), cfg.terrain, cfg.detection,
-                jnp.asarray(emitter_enu), jnp.asarray(pos),
-            )
-        )
-        return {"tracker": tracker, "emitter_enu": emitter_enu, "clearance": clearance,
-                "pd": pd_arr}
+        out = self._track(st.hmap, st.air.pos, st.air.psi, st.threats.pos,
+                          st.threats.kind, st.threats.active)
+        return {k: np.asarray(v) for k, v in out.items()}
 
     # --------------------------------------------------------------- publish
     def _publish(self, feasible, exposure, retasked=None):
@@ -717,14 +733,14 @@ class Simulation:
         att = aircraft_attitude(self.georef, pos, np.asarray(st.air.psi),
                                 np.asarray(st.air.gamma), np.asarray(st.air.phi))
 
-        ground = np.asarray(sample_height(jnp.asarray(st.hmap), cfg.terrain, pos[:, 0], pos[:, 1]))
+        ground = np.asarray(_ground_m(jnp.asarray(st.hmap), cfg.terrain, pos[:, 0], pos[:, 1]))
 
         tpos = np.asarray(st.threats.pos)
         trk = self._tracking(st)
         tracker, emitter_enu, clearance, pd_arr = (
             trk["tracker"], trk["emitter_enu"], trk["clearance"], trk["pd"])
         trk_lon, trk_lat = self.georef.to_wgs84(tpos[tracker, 0], tpos[tracker, 1])
-        los_rays = self._los_rays(st, emitter_enu, pos)
+        los_rays = self._los_rays(emitter_enu, pos, trk["ray_ground"])
         in_flight = np.asarray(st.alive) & ~np.asarray(st.reached)
 
         obj = np.asarray(st.objective)
@@ -806,7 +822,7 @@ class Simulation:
             return self.snapshot
 
     # ------------------------------------------------------------- LOS rays
-    def _los_rays(self, st, emitter_enu, pos) -> list[dict]:
+    def _los_rays(self, emitter_enu, pos, ground) -> list[dict]:
         """The tracker ray as the curve the model actually marched.
 
         The frame used to carry the emitter, the aircraft and one clearance
@@ -826,13 +842,6 @@ class Simulation:
         cfg = self.env.cfg
         dcfg = cfg.detection
         n = cfg.n_blue
-
-        s = los_mod.sample_fractions(dcfg.los_samples)[None, :]      # (1, S)
-        seg = pos - emitter_enu                                      # (B, 3)
-        gx = emitter_enu[:, None, 0] + s * seg[:, None, 0]
-        gy = emitter_enu[:, None, 1] + s * seg[:, None, 1]
-        ground = np.asarray(sample_height(
-            jnp.asarray(st.hmap), cfg.terrain, jnp.asarray(gx), jnp.asarray(gy)))
 
         prof = los_mod.profile(
             emitter_enu, pos, ground,

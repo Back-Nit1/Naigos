@@ -70,10 +70,6 @@ Provenance: [`nyc_harbor/DATA.md`](nyc_harbor/DATA.md); components in
 | ground (10 m, physics box) | USGS 3DEP bare earth | public domain | 3DEP seamless mosaic |
 | structure heights | USGS 3DEP lidar point cloud, EPT collection `NY_NewYorkCity`, building (6) and bridge-deck (17) returns | public domain | **captured 2013-08-05 .. 2014-04-21** (post-Sandy survey), published 2015-04-14 |
 | footprints and roof heights | NYC Building Footprints, NYC Open Data `5zhs-2jue` | NYC Open Data Terms of Use | features last edited 2006-09-25 .. 2026-10-15; dataset updated 2026-10-25 |
-| atmosphere | Open-Meteo forecast at the AOI centre | CC BY 4.0 | forecast window |
-| civil airfields | OurAirports | public domain | -- |
-| flight envelope | OpenSky (shared calibration sample) | OpenSky terms, non-commercial | -- |
-| city layer (visual only) | OpenStreetMap via Overpass, `naigos.demo.urban` | ODbL 1.0 -- (c) OpenStreetMap contributors | at fetch |
 
 **Staleness, said plainly.** The lidar is a 2013-14 capture; the structure surface is
 not "current conditions" and says so (`sources[].captured`). The artifact build date is
@@ -113,21 +109,6 @@ absolute 2.83 m.
   (`naigos.data.theatre.load_urban_obstacles_for`); there is no fallback to OSM, provider
   tiles or the DEM.
 
-## Presentation versus evidence
-
-| layer | what it is | evidence |
-| --- | --- | --- |
-| physics terrain | the simulation's DEM, `/terrain` | yes |
-| physics urban obstacles | the artifact above, drawn cell for cell in `--visual physics` | yes |
-| presentation-only local buildings | OSM extrusions (`naigos.demo.urban`) in `--visual urban-presentation` | no |
-| presentation-only provider buildings | Google Photorealistic 3D Tiles, `--urban-geometry provider`, needs a credential | no |
-
-The HUD's *Surfaces* block names all four on separate lines, `/scene` carries
-`physics_urban` (schema, hashes, resolution, coverage, no paths or tokens), and a
-physics export embeds the obstacle surface while a presentation export embeds only
-its status. If the artifact is missing the HUD reads **UNAVAILABLE**, draws nothing in
-its place, and the OSM layer is never labelled physical.
-
 ## Cameras and look
 
 All three are checked before the page sees them (above the DEM, sightline clear,
@@ -150,25 +131,7 @@ no swatch as bright and saturated as the red threat or green detection overlays.
 
 ## Commands
 
-```bash
-uv run naigos-research --aoi nyc_harbor
-uv run python -m naigos.demo.urban --aoi nyc_harbor
-
-# Evidence-grade: terrain + the physics obstacle surface.
-uv run python -m naigos.demo.live --aoi nyc_harbor \
-  --checkpoint checkpoints/theatre_1000 --visual physics --camera urban-overview --open
-
-# Dense presentation city; never LOS evidence.
-uv run python -m naigos.demo.live --aoi nyc_harbor \
-  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
-  --camera urban-overview --open
-
-# Without a browser: what would be drawn, including the four surfaces.
-uv run python -m naigos.demo.live --aoi nyc_harbor --visual physics --smoke-render
-```
-
-The shipped checkpoint was trained on `owens_valley`; every view says **ZERO-SHOT**.
-No NYC training command is added.
+Run, record and replay it with the [shared commands](README.md#commands-for-any-theatre-aoi), `<aoi>` = `nyc_harbor`.
 
 ## Known limitations
 

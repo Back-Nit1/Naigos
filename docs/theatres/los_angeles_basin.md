@@ -54,10 +54,6 @@ Provenance: [`los_angeles_basin/DATA.md`](los_angeles_basin/DATA.md); components
 | --- | --- | --- | --- |
 | terrain (30 m, AOI) and ground (10 m, physics box) | USGS 3DEP bare earth | public domain | 3DEP seamless mosaic |
 | structure heights | USGS 3DEP lidar point cloud, EPT collection `CA_LosAngeles_1_B23`, unclassified (1) and bridge-deck (17) returns | public domain | **captured 2023-09-25 .. 2024-01-08**; EPT copy built 2025-11-21 (publisher release date not listed by the National Map) |
-| atmosphere | Open-Meteo forecast at the AOI centre | CC BY 4.0 | forecast window |
-| civil airfields | OurAirports | public domain | -- |
-| flight envelope | OpenSky (shared calibration sample) | OpenSky terms, non-commercial | -- |
-| city layer (visual only) | OpenStreetMap via Overpass, `naigos.demo.urban` | ODbL 1.0 -- (c) OpenStreetMap contributors | at fetch |
 
 **LARIAC: evaluated, not used -- a licensing gate.** LA County's building outlines and
 heights (LARIAC) were considered. A redistribution licence for derived data that can be
@@ -95,19 +91,6 @@ unit error would fail the build, > 5 m).
 * **fail-closed**: the theatre cannot load without it; no fallback to OSM, provider tiles or
   the DEM.
 
-## Presentation versus evidence
-
-| layer | what it is | evidence |
-| --- | --- | --- |
-| physics terrain | the simulation's DEM, `/terrain` | yes |
-| physics urban obstacles | the artifact above, drawn cell for cell in `--visual physics` | yes |
-| presentation-only local buildings | OSM extrusions (`naigos.demo.urban`) in `--visual urban-presentation` | no |
-| presentation-only provider buildings | Google Photorealistic 3D Tiles, `--urban-geometry provider`, needs a credential | no |
-
-The HUD's *Surfaces* block names all four on separate lines; `/scene` carries
-`physics_urban`; a physics export embeds the obstacle surface and a presentation export
-only its status. A missing artifact reads **UNAVAILABLE** and nothing is drawn in its place.
-
 ## Cameras and look
 
 Checked before the page sees them (above the DEM, clear sightline, inside the safe region,
@@ -128,23 +111,7 @@ highlights, clear of the red and green overlay colours.
 
 ## Commands
 
-```bash
-uv run naigos-research --aoi los_angeles_basin
-uv run python -m naigos.demo.urban --aoi los_angeles_basin
-
-# Evidence-grade: terrain + the physics obstacle surface.
-uv run python -m naigos.demo.live --aoi los_angeles_basin \
-  --checkpoint checkpoints/theatre_1000 --visual physics --camera urban-overview --open
-
-# Dense presentation city; never LOS evidence.
-uv run python -m naigos.demo.live --aoi los_angeles_basin \
-  --checkpoint checkpoints/theatre_1000 --visual urban-presentation \
-  --camera urban-overview --open
-
-uv run python -m naigos.demo.live --aoi los_angeles_basin --visual physics --smoke-render
-```
-
-The shipped checkpoint was trained on `owens_valley`; every view says **ZERO-SHOT**.
+Run, record and replay it with the [shared commands](README.md#commands-for-any-theatre-aoi), `<aoi>` = `los_angeles_basin`.
 
 ## Known limitations
 

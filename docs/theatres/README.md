@@ -67,6 +67,21 @@ it. The viewer's HUD names four surfaces separately: physics terrain, physics ur
 obstacles, presentation-only local buildings, presentation-only provider buildings.
 `--visual physics` draws the artifact itself; every other mode reports it as
 "not drawn" and never as physical.
+`/scene` carries `physics_urban` (schema, hashes, resolution, coverage; no paths or tokens), a
+physics export embeds the obstacle surface and a presentation export only its status, and a
+missing artifact reads **UNAVAILABLE** with nothing drawn in its place. Add `--smoke-render` to
+any command to print what would be drawn, including the four surfaces, without a browser.
+
+## Sources every theatre shares
+
+Per-theatre docs list only their own terrain, lidar and footprint inputs. These four are the same everywhere:
+
+| input | source | licence |
+| --- | --- | --- |
+| atmosphere | Open-Meteo forecast at the AOI centre | CC BY 4.0 |
+| civil airfields | OurAirports | public domain |
+| flight envelope | OpenSky (shared calibration sample) | OpenSky terms, non-commercial |
+| city layer (visual only) | OpenStreetMap via Overpass, `naigos.demo.urban` | ODbL 1.0 -- (c) OpenStreetMap contributors |
 
 ## Commands, for any theatre `<aoi>`
 
