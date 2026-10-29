@@ -4,9 +4,10 @@ Status: **implemented format version 1.0.0 / schema version 1.0.0**, and
 **collection is implemented**: opt-in recorders write this format from the PPO
 collector, the evaluators, the route and resource banks, the pipeline evaluator
 and the demo replay (see [Collection](#collection-from-real-naigos-rollouts)).
-Recording is off by default. **Nothing here consumes the data yet**: no
-behavior cloning, offline RL, transformer or language-model training has been
-done, and no result in this repository comes from this data.
+Recording is off by default. The separate Qwen route-intent pipeline can now
+turn completed shards into causal planner examples and LoRA-train from them,
+but no production corpus or planner adapter has been trained. No published
+result in this repository comes from trajectory-data training.
 
 ## Purpose and boundary
 
@@ -387,7 +388,9 @@ interruption; resume sessions; reconstruction of requested actions from the
 checkpointed actor, recorded observations and recorded memory.
 
 Not measured or claimed: compression ratio, collector throughput, recommended
-chunk size, behavior-cloning accuracy, or offline policy performance. **Offline
-training of any kind is future work**: no behavior cloning, offline RL,
-transformer or language-model training exists, and nothing here is evidence of
-real-aircraft readiness -- Naigos remains a simulation and research system.
+chunk size, behavior-cloning accuracy, planner accuracy, or offline policy
+performance. The Qwen LoRA pipeline is implemented and smoke-tested, while
+behavior cloning, offline RL and the numeric transformer remain future work.
+No adapter has been trained on a real Naigos corpus, and nothing here is
+evidence of real-aircraft readiness -- Naigos remains a simulation and research
+system.

@@ -17,6 +17,11 @@ checkpoints/*
 .env
 node_modules/
 
+# Open-weight planner assets are staged locally and pinned by the committed
+# manifest under naigos/planner/.  Never put multi-GB upstream weights in git.
+models/**
+!models/README.md
+
 # Claude Code worktree checkouts: separate git repos living inside this one.
 # Committing them produces the "embedded git repository" warning and a gitlink
 # that no clone can resolve.

@@ -28,6 +28,7 @@ from naigos.rl.ppo import PPOConfig
 from naigos.rl.red_team import RedCurriculum
 from naigos.rl.reward import RewardCurriculum, RewardWeights
 from naigos.rl.train import PlateauConfig, TrainConfig, run
+from naigos.rl import trajectory_recording as trec
 from naigos.research.aoi import DEFAULT_AOI
 
 
@@ -114,7 +115,9 @@ if __name__ == "__main__":
     ap.add_argument("--override-resume", action="append", default=[], metavar="KEY",
                     help=f"accept one named incompatibility. Keys: "
                          f"{', '.join(runmeta.RESUME_BLOCKING_KEYS)}")
+    trec.add_cli_args(ap)
     a = ap.parse_args()
+    recording = trec.config_from_args(a)
 
     out = Path(a.out)
 
@@ -180,7 +183,7 @@ if __name__ == "__main__":
         TrainConfig(iterations=a.iterations, out_dir=a.out, seed=a.seed, eval_every=20,
                     checkpoint_every=100, use_cbf=a.cbf, route_eval=a.route_eval,
                     route_eval_context={"aoi": a.aoi or DEFAULT_AOI} if a.route_eval else None,
-                    plateau=PlateauConfig() if a.plateau else None),
+                    plateau=PlateauConfig() if a.plateau else None, recording=recording),
         hmap=hmap,
         meta=meta,
         resume_from=resume_from,

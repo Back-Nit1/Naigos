@@ -28,6 +28,16 @@ demo = ["matplotlib>=3.8", "plotly>=5.20"]
 # model/configuration bytes must also be supplied locally with pinned hashes.
 validation = ["jsbsim==1.2.3"]
 dev = ["pytest>=8.0"]
+# Offline high-level planner training. Deliberately excluded from `all`: the
+# JAX simulator/control stack must not acquire a Torch dependency merely because
+# a planner experiment is available.
+planner = [
+  "torch>=2.4",
+  "transformers>=4.51,<5",
+  "peft>=0.14",
+  "accelerate>=1.2",
+  "safetensors>=0.4",
+]
 # Everything needed to run the full suite and the demo in one go.
 all = ["naigos[research,data,rl,demo,validation,dev]"]
 
@@ -46,6 +56,8 @@ include = ["naigos*"]
 "naigos.pipeline" = ["default_config.json"]
 # File-defined theatres, discovered at import (naigos.research.aoi).
 "naigos.research" = ["aois/*.json"]
+# Immutable upstream revision and per-file hashes for local Qwen assets.
+"naigos.planner" = ["*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

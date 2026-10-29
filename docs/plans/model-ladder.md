@@ -5,6 +5,14 @@ checkpoint, or remote resource was changed while producing this plan. No model
 weights were downloaded. Every experiment below is proposed unless it is
 explicitly labelled **repository fact**, **measured**, or **calculated**.
 
+Implementation note, 2026-10-29: the separate Qwen3-0.6B-Base asset,
+trajectory-preparation, LoRA-training and fixed-label evaluation pipeline is now
+implemented in `naigos/planner/` and `scripts/qwen_planner.py`; see
+`docs/QWEN_PLANNER.md`. It has only passed a one-example trainer smoke test. No
+production planner dataset, trained adapter, numeric-planner comparison or
+closed-loop result exists. The experimental ordering below remains the gate for
+claiming planner value.
+
 ## Decision
 
 Keep the shipped DeepSets actor as `deepsets@1` and make the main ladder:
@@ -481,9 +489,10 @@ policy.
 The data boundary this section's offline options need now exists: DeepSets and
 GRU rollouts, with or without a CBF, in baseline-v0 or L1 endurance, can be
 recorded to `naigos.trajectory` datasets (`docs/TRAJECTORY_DATA.md`). Recurrent
-policies add explicit `extension/memory_*` fields. This is collection only; the
-behavior-cloning, transformer and language-planner options above remain
-unimplemented and unmeasured.
+policies add explicit `extension/memory_*` fields. The Qwen route-intent
+preparation and LoRA path is implemented but has no real corpus, adapter or
+result; behavior cloning and the numeric-transformer option remain unimplemented
+and unmeasured.
 
 ## Recommended next integration step
 

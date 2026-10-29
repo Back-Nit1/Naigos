@@ -46,6 +46,7 @@ naigos/rl/train.py -> modal_train.py           naigos/demo/replay.py -> demo.jso
 | cloud learning pipeline | `naigos/pipeline/`, `naigos/rl/modal_pipeline.py`, `scripts/pipeline.py` | core (stdlib); Modal to deploy | `pytest tests/test_pipeline_*.py tests/test_research_roots.py` |
 | trajectory datasets | `naigos/trajectory/` | core (NumPy; no JAX) | `pytest tests/test_trajectory_data.py` |
 | trajectory recording | `naigos/rl/trajectory_recording.py` | `rl` | `pytest tests/test_trajectory_recording.py` |
+| offline Qwen route-intent planner | `naigos/planner/`, `scripts/qwen_planner.py` | `planner` (training/eval only) | `pytest tests/test_qwen_planner.py` |
 | weather + missions | `naigos/env/weather.py`, `mission.py`, `scenario_bank.py` | core | `pytest tests/test_weather_physics.py tests/test_missions.py tests/test_city_scenario_bank.py` |
 | urban physics consumer | `naigos/env/urban.py` | core | `pytest tests/test_urban_physics_env.py tests/test_physics_los.py` |
 | independent physics evidence | `naigos/rl/physics_verifier.py` | core (NumPy only) | `pytest tests/test_physics_verifier.py tests/test_physics_mission_verifier.py` |
@@ -107,8 +108,10 @@ for future behavior cloning, failure analysis and offline evaluation. It stays
 framework-neutral; `naigos/rl/trajectory_recording.py` is the JAX adapter that
 writes it from the PPO collector, the evaluators, the route/resource banks, the
 pipeline evaluator and the demo replay. Recording is opt-in and off by default
-(`TrainConfig.recording`, `--record-trajectories`); nothing trains on the data
-yet. Immutable canonical metadata declares every dtype, shape, unit
+(`TrainConfig.recording`, `--record-trajectories`). The isolated Qwen planner
+pipeline can prepare and LoRA-train fixed route-intent labels from completed
+shards, but no production corpus or trained adapter exists. Immutable canonical
+metadata declares every dtype, shape, unit
 and normalization; bounded chunks carry arrays plus per-chunk hashes; a final
 manifest is written last and is the only completion marker. The fixed action
 components remain bank, flight-path angle and throttle. The complete contract
