@@ -513,7 +513,9 @@ class Simulation:
         cfg = self.env.cfg
         self.key = jax.random.PRNGKey(self.seed)
         self.key, k0 = jax.random.split(self.key)
-        self.state, self.obs = self.env.reset(k0)
+        # Eager reset/observe compiled ~400 one-op XLA programs (~4.5 s before the port opened).
+        self._observe = jax.jit(self.env.observe)
+        self.state, self.obs = jax.jit(self.env.reset)(k0)
         initial_memory = getattr(self.policy, "initial_memory", None)
         self.policy_memory = (
             None if initial_memory is None else jnp.array(initial_memory)
@@ -621,7 +623,7 @@ class Simulation:
             if done_mask.any():
                 self.key, kr = jax.random.split(self.key)
                 self.state = self._respawn(self.state, kr, jnp.asarray(done_mask))
-                self.obs = self.env.observe(self.state)
+                self.obs = self._observe(self.state)
                 self._reset_policy_memory(done_mask)
                 self.counters.sorties += int(done_mask.sum())
                 # a new sortie: nothing from the old one can be emitted again
@@ -630,7 +632,7 @@ class Simulation:
             if self.reroll_s > 0 and self.sim_t >= self._next_reroll:
                 self.key, kt = jax.random.split(self.key)
                 self.state = self._reroll(self.state, kt)
-                self.obs = self.env.observe(self.state)
+                self.obs = self._observe(self.state)
                 # A newly sampled threat world must not inherit hidden features
                 # about the layout it replaced.
                 self._reset_policy_memory()
@@ -1275,6 +1277,7 @@ def make_handler(sim: Simulation, notes: dict, ion_token: str | None,
             self.wfile.write(body)
 
         def do_GET(self):
+            self.path = self.path.partition("?")[0]  # ?fps=/?msaa= are read by the page, not routed
             if self.path in ("/", "/index.html"):
                 return self._send(html.encode(), "text/html; charset=utf-8")
             if self.path == "/scene":
